@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -158,6 +158,42 @@ function verifyPrefix(value, fallback) {
   return withPrefix === "krano-" || withPrefix.length < 4 ? fallback : withPrefix;
 }
 
+function loginCloudflare() {
+  return new Promise((resolve, reject) => {
+    let opened = false;
+    const child = spawn(process.execPath, [wranglerBin, "login"], {
+      cwd: projectRoot,
+      env: process.env,
+      stdio: ["inherit", "pipe", "pipe"]
+    });
+
+    child.stdout.on("data", (data) => {
+      const text = data.toString();
+      output.write(text);
+      const match = text.match(/https:\/\/dash\.cloudflare\.com\/oauth2\/auth\?[^\s\r\n]+/i);
+      if (match && !opened) {
+        opened = true;
+        info("Abrindo a página de autorização no seu navegador...");
+        openBrowser(match[0]);
+      }
+    });
+
+    child.stderr.on("data", (data) => {
+      const text = data.toString();
+      output.write(text);
+      const match = text.match(/https:\/\/dash\.cloudflare\.com\/oauth2\/auth\?[^\s\r\n]+/i);
+      if (match && !opened) {
+        opened = true;
+        info("Abrindo a página de autorização no seu navegador...");
+        openBrowser(match[0]);
+      }
+    });
+
+    child.on("error", reject);
+    child.on("close", () => resolve());
+  });
+}
+
 async function chooseAccount() {
   let whoami = runWrangler(["whoami"], { quiet: true, allowFailure: true });
   let clean = stripAnsi(`${whoami.stdout}\n${whoami.stderr}`);
@@ -170,7 +206,7 @@ async function chooseAccount() {
     line("  • criar o banco D1 e a biblioteca R2;");
     line("  • configurar os domínios que você escolher.");
     line();
-    runWrangler(["login"], { interactive: true });
+    await loginCloudflare();
     whoami = runWrangler(["whoami"], { quiet: true });
     clean = stripAnsi(`${whoami.stdout}\n${whoami.stderr}`);
     accounts = parseAccounts(clean);
