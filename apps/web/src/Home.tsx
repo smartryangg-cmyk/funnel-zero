@@ -100,6 +100,8 @@ export function Home({ user }: { user: SessionUser }) {
 
       <section className="command-status-grid" aria-label="Estado da operação">
         <CommandStatus
+          icon="CF"
+          tone="orange"
           label="Infraestrutura"
           value={state.provider?.ready ? "Conectada" : "Conectar"}
           detail={state.provider?.ready ? state.provider.accountName || "Cloudflare pronta" : "Autorize a conta uma vez"}
@@ -107,6 +109,8 @@ export function Home({ user }: { user: SessionUser }) {
           href="/integrations/cloudflare"
         />
         <CommandStatus
+          icon="WEB"
+          tone="violet"
           label="Publicação"
           value={`${format(livePages.length)} no ar`}
           detail={`${format(state.pages.length)} página(s) na operação`}
@@ -114,6 +118,8 @@ export function Home({ user }: { user: SessionUser }) {
           href="/studio"
         />
         <CommandStatus
+          icon="PLAY"
+          tone="red"
           label="KRATUBE"
           value={`${format(readyVideos.length)} vídeo(s)`}
           detail={readyVideos.length ? "Player pronto para configurar" : "Envie sua primeira VSL"}
@@ -121,6 +127,8 @@ export function Home({ user }: { user: SessionUser }) {
           href="/kratube"
         />
         <CommandStatus
+          icon="DATA"
+          tone="blue"
           label="Dados dos últimos 7 dias"
           value={`${format(state.metrics?.pageViews ?? 0)} visitas`}
           detail={state.metrics ? `${formatBytes(state.metrics.storageBytes)} armazenados` : "Aguardando leitura"}
@@ -150,12 +158,16 @@ function QuickStep({ number, title, text, action, href }: { number: string; titl
 }
 
 function CommandStatus({
+  icon,
+  tone,
   label,
   value,
   detail,
   ready,
   href
 }: {
+  icon: string;
+  tone: "orange" | "violet" | "red" | "blue";
   label: string;
   value: string;
   detail: string;
@@ -163,7 +175,8 @@ function CommandStatus({
   href: string;
 }) {
   return (
-    <button className="command-status" onClick={() => navigate(href)}>
+    <button className={`command-status tone-${tone}`} onClick={() => navigate(href)}>
+      <span className="command-status-icon" aria-hidden="true">{icon}</span>
       <span className={`command-status-dot ${ready ? "ready" : ""}`} />
       <small>{label}</small>
       <strong>{value}</strong>

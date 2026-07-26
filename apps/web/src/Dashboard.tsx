@@ -69,7 +69,7 @@ export function Dashboard({ user }: { user: SessionUser }) {
     <>
       <PageHeader
         eyebrow="Dashboard"
-        title={`Bom teste, ${firstName(user.name)}.`}
+        title={`Seus números, ${firstName(user.name)}.`}
         subtitle="Veja onde o lead avança, onde para e onde a receita está escapando."
         actions={<button className="button primary" onClick={() => navigate("/studio")}>Abrir ofertas</button>}
       />
@@ -110,16 +110,16 @@ export function Dashboard({ user }: { user: SessionUser }) {
         <>
           {view === "summary" && <>
             <section className="metric-grid executive" aria-label="Métricas principais">
-              <Metric icon="R$" label="Faturamento registrado" value={currency.format(metrics.revenue)} note="Compras confirmadas por evento ou webhook" />
-              <Metric icon="◉" label="Visualizações" value={format(metrics.pageViews)} note={`${format(metrics.approximateVisitors)} visitantes únicos aproximados`} />
-              <Metric icon="✓" label="Conversão" value={`${metrics.conversionRate}%`} note={`${format(metrics.conversions)} compras confirmadas`} />
-              <Metric icon="⇢" label="Cliques no checkout" value={format(metrics.checkoutClicks)} note={`${metrics.clickThroughRate}% das visualizações`} />
+              <Metric tone="emerald" icon="R$" label="Faturamento registrado" value={currency.format(metrics.revenue)} note="Compras confirmadas por evento ou webhook" />
+              <Metric tone="blue" icon="◉" label="Visualizações" value={format(metrics.pageViews)} note={`${format(metrics.approximateVisitors)} visitantes únicos aproximados`} />
+              <Metric tone="violet" icon="✓" label="Conversão" value={`${metrics.conversionRate}%`} note={`${format(metrics.conversions)} compras confirmadas`} />
+              <Metric tone="red" icon="⇢" label="Cliques no checkout" value={format(metrics.checkoutClicks)} note={`${metrics.clickThroughRate}% das visualizações`} />
             </section>
             <section className="metric-grid compact finance-strip">
-              <Metric icon="▶" label="Plays da VSL" value={format(metrics.vslStarts)} note={`${metrics.averageRetention}% de retenção média`} />
-              <Metric icon="◎" label="Chegaram ao pitch" value={format(metrics.pitchReached)} note="Evento real do player KRATUBE" />
-              <Metric icon="✦" label="Leads" value={format(metrics.leads)} note={`${format(metrics.quizCompletions)} quizzes concluídos`} />
-              <Metric icon="—" label="Gastos e lucro" value="Conectar" note="Sem inventar ROAS: exige conta de anúncios" />
+              <Metric tone="red" icon="▶" label="Plays da VSL" value={format(metrics.vslStarts)} note={`${metrics.averageRetention}% de retenção média`} />
+              <Metric tone="amber" icon="◎" label="Chegaram ao pitch" value={format(metrics.pitchReached)} note="Evento real do player KRATUBE" />
+              <Metric tone="cyan" icon="✦" label="Leads" value={format(metrics.leads)} note={`${format(metrics.quizCompletions)} quizzes concluídos`} />
+              <Metric tone="slate" icon="—" label="Gastos e lucro" value="Conectar" note="Sem inventar ROAS: exige conta de anúncios" />
             </section>
             {biggestLeak ? (
               <section className="leak-alert">
@@ -265,8 +265,8 @@ function downloadCsv(name: string, rows: Array<Array<string | number>>) {
   URL.revokeObjectURL(url);
 }
 
-function Metric({ icon, label, value, note }: { icon: string; label: string; value: string; note: string }) {
-  return <article className="metric-card"><div className="metric-top"><span className="metric-icon">{icon}</span><span>●</span></div><span className="metric-label">{label}</span><strong>{value}</strong><small>{note}</small></article>;
+function Metric({ tone, icon, label, value, note }: { tone: "emerald" | "blue" | "violet" | "red" | "amber" | "cyan" | "slate"; icon: string; label: string; value: string; note: string }) {
+  return <article className={`metric-card tone-${tone}`}><div className="metric-top"><span className="metric-icon">{icon}</span><span>●</span></div><span className="metric-label">{label}</span><strong>{value}</strong><small>{note}</small></article>;
 }
 
 function HorizontalFunnel({ stages }: { stages: FunnelMetricStage[] }) {
@@ -298,8 +298,8 @@ function HorizontalFunnel({ stages }: { stages: FunnelMetricStage[] }) {
       <svg viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" aria-hidden="true">
         <defs>
           <linearGradient id="krano-flow" x1="0" x2="1">
-            <stop offset="0" stopColor="#3a0000" />
-            <stop offset=".48" stopColor="#b80000" />
+            <stop offset="0" stopColor="#5f0000" />
+            <stop offset=".5" stopColor="#c70000" />
             <stop offset="1" stopColor="#ff0000" />
           </linearGradient>
           <filter id="krano-glow"><feGaussianBlur stdDeviation="9" /></filter>

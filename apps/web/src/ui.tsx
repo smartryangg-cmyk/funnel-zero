@@ -11,7 +11,8 @@ export function Brand() {
   return (
     <div className="brand" aria-label="KRANO">
       <span className="brand-mark" aria-hidden="true"><i /><i /></span>
-      <span>KRANO</span>
+      <span className="brand-word">KRANO</span>
+      <small className="brand-version">v0.2</small>
     </div>
   );
 }
@@ -127,9 +128,13 @@ export function AppShell({
   }
 
   return (
-    <div className={`app-shell ${sidebarCollapsed ? "sidebar-is-collapsed" : ""}`}>
+    <div className={`app-shell redline-theme tone-red ${sidebarCollapsed ? "sidebar-is-collapsed" : ""}`}>
       <aside className="sidebar" aria-label="Menu principal">
         <Brand />
+        <div className="sidebar-context">
+          <span className="sidebar-context-orb" aria-hidden="true"><i /></span>
+          <span><small>Workspace</small><strong>Operação principal</strong></span>
+        </div>
         <button
           type="button"
           className="sidebar-toggle"
@@ -200,8 +205,9 @@ export function PageHeader({
 }) {
   return (
     <header className="dashboard-header">
-      <div>
-        <div className="breadcrumb">KRANO / {eyebrow}</div>
+      <div className="page-heading-copy">
+        <div className="breadcrumb"><span>KRANO</span><i aria-hidden="true" />{eyebrow}</div>
+        <div className="page-title-line" aria-hidden="true" />
         <h1>{title}</h1>
         <p>{subtitle}</p>
       </div>
