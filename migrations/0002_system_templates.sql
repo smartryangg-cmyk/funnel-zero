@@ -1,0 +1,11 @@
+INSERT INTO templates(id, name, slug, category, content_json) VALUES
+('tpl_vsl', 'Página VSL', 'pagina-vsl', 'vsl',
+ '{"version":1,"theme":{"background":"#070b16","text":"#f5f7fb","accent":"#8b5cf6"},"blocks":[{"id":"eyebrow","type":"paragraph","content":"APRESENTAÇÃO ESPECIAL"},{"id":"headline","type":"heading","content":"Uma ideia clara antes da próxima decisão"},{"id":"video","type":"video","content":{"poster":"","src":"","ctaAtSeconds":45}},{"id":"cta","type":"button","content":{"label":"Conhecer a oferta","href":"#oferta"}}]}'),
+('tpl_advertorial', 'Advertorial', 'advertorial', 'advertorial',
+ '{"version":1,"theme":{"background":"#faf8f3","text":"#202124","accent":"#0f766e"},"blocks":[{"id":"kicker","type":"paragraph","content":"CONTEÚDO INFORMATIVO"},{"id":"headline","type":"heading","content":"O detalhe que muda a forma de avaliar uma solução"},{"id":"body","type":"paragraph","content":"Este é um conteúdo demonstrativo original. Substitua por informações verificáveis da sua oferta."},{"id":"cta","type":"button","content":{"label":"Continuar","href":"#proximo"}}]}'),
+('tpl_quiz', 'Quiz simples', 'quiz-simples', 'quiz',
+ '{"version":1,"theme":{"background":"#08111f","text":"#f8fafc","accent":"#22c55e"},"blocks":[{"id":"headline","type":"heading","content":"Descubra seu próximo passo em 2 minutos"},{"id":"intro","type":"paragraph","content":"Responda algumas perguntas para receber uma orientação personalizada."},{"id":"quiz","type":"quiz","content":{"questions":[]}}]}'),
+('tpl_captura', 'Captura de lead', 'captura-de-lead', 'lead',
+ '{"version":1,"theme":{"background":"#f3f5f8","text":"#111827","accent":"#2563eb"},"blocks":[{"id":"headline","type":"heading","content":"Receba o material demonstrativo"},{"id":"sub","type":"paragraph","content":"Informe seus dados para acessar o conteúdo."},{"id":"form","type":"leadForm","content":{"fields":["name","email"],"consent":true}}]}'),
+('tpl_obrigado', 'Página de obrigado', 'pagina-de-obrigado', 'thank-you',
+ '{"version":1,"theme":{"background":"#07131b","text":"#effdf8","accent":"#14b8a6"},"blocks":[{"id":"headline","type":"heading","content":"Tudo certo por aqui."},{"id":"body","type":"paragraph","content":"Seu envio foi recebido. Confira as próximas instruções."},{"id":"cta","type":"button","content":{"label":"Voltar ao início","href":"/"}}]}');

@@ -1,0 +1,44 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "funnel-zero-development",
+  "main": "apps/worker/src/index.ts",
+  "compatibility_date": "2026-07-25",
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": [
+      "/api/*",
+      "/login*",
+      "/setup*",
+      "/dashboard*",
+      "/media/*"
+    ]
+  },
+  "d1_databases": [],
+  "r2_buckets": [],
+  "vars": {
+    "APP_NAME": "Funnel Zero",
+    "ENVIRONMENT": "development",
+    "FREE_ONLY": "true",
+    "MAX_STORAGE_BYTES": "10737418240",
+    "MAX_FILE_BYTES": "524288000",
+    "SESSION_DAYS": "7"
+  },
+  "triggers": {
+    "crons": [
+      "17 3 * * *"
+    ]
+  },
+  "observability": {
+    "enabled": true,
+    "logs": {
+      "enabled": true,
+      "head_sampling_rate": 0.1,
+      "invocation_logs": true
+    }
+  }
+}

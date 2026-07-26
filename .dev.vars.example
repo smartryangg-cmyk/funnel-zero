@@ -1,0 +1,3 @@
+# Copie para .dev.vars somente no desenvolvimento local.
+# Gere um valor aleatório; nunca commite .dev.vars.
+SESSION_SECRET=development-only-replace-with-random-value
