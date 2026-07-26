@@ -105,20 +105,21 @@ function Setup({ onComplete }: { onComplete: () => Promise<void> }) {
     try {
       await api.setup({ token, name: form.name, email: form.email, password: form.password });
       await onComplete();
-      location.assign("/home");
+      navigate("/home", true);
     } catch (caught) {
       setError(caught instanceof ApiError ? caught.message : "Falha ao configurar.");
     } finally { setSaving(false); }
   }
   return (
-    <AuthLayout badge="Configuração inicial" title="Sua infraestrutura. Suas regras." subtitle="Crie o proprietário desta instalação para acessar seu painel.">
+    <AuthLayout badge="Configuração inicial" title="Sua infraestrutura. Suas regras." subtitle="Crie o proprietário desta instalação. O link de uso único será invalidado.">
+      {!token && <div className="notice warning">Execute <code>npm run setup</code> e abra a URL gerada.</div>}
       <form className="form" onSubmit={(event) => void submit(event)}>
         <Field label="Seu nome"><input required minLength={2} value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /></Field>
         <Field label="E-mail administrativo"><input type="email" required value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} /></Field>
         <Field label="Senha forte"><input type="password" required minLength={12} value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} /></Field>
         <Field label="Confirmar senha"><input type="password" required value={form.confirm} onChange={(event) => setForm({ ...form, confirm: event.target.value })} /></Field>
         {error && <p className="form-error">{error}</p>}
-        <button className="button primary full" disabled={saving}>{saving ? "Criando…" : "Concluir configuração"}</button>
+        <button className="button primary full" disabled={!token || saving}>{saving ? "Criando…" : "Concluir configuração"}</button>
       </form>
       <Security />
     </AuthLayout>
@@ -126,35 +127,11 @@ function Setup({ onComplete }: { onComplete: () => Promise<void> }) {
 }
 
 function Login({ onComplete }: { onComplete: () => Promise<void> }) {
-  const [mode, setMode] = useState<"password" | "code" | "reset" | "register">("password");
   const [email, setEmail] = useState("");
-  const [name, setName] = useState("");
   const [password, setPassword] = useState("");
-  const [newPassword, setNewPassword] = useState("");
-  const [code, setCode] = useState("");
-  const [showPassword, setShowPassword] = useState(false);
-  const [codeSent, setCodeSent] = useState(false);
-  const [codeMessage, setCodeMessage] = useState("");
   const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
   const [saving, setSaving] = useState(false);
-
-  async function handleSendCode() {
-    if (!email || !email.includes("@")) return setError("Informe seu e-mail para receber o código.");
-    setSaving(true);
-    setError("");
-    setNotice("");
-    try {
-      const res = await api.sendAuthCode(email);
-      setCodeSent(true);
-      setCodeMessage(res.message);
-      setNotice(res.message);
-    } catch (caught) {
-      setError(caught instanceof ApiError ? caught.message : "Falha ao enviar código.");
-    } finally { setSaving(false); }
-  }
-
-  async function submitPassword(event: FormEvent) {
+  async function submit(event: FormEvent) {
     event.preventDefault();
     setSaving(true);
     setError("");
@@ -163,260 +140,17 @@ function Login({ onComplete }: { onComplete: () => Promise<void> }) {
       await onComplete();
       navigate("/home", true);
     } catch (caught) {
-      setError(caught instanceof ApiError ? caught.message : "E-mail ou senha incorretos.");
+      setError(caught instanceof ApiError ? caught.message : "Falha ao entrar.");
     } finally { setSaving(false); }
   }
-
-  async function submitRegister(event: FormEvent) {
-    event.preventDefault();
-    if (password.length < 12) return setError("A senha deve ter pelo menos 12 caracteres.");
-    setSaving(true);
-    setError("");
-    try {
-      const res = await api.register({ name, email, password });
-      setNotice(res.message);
-      setMode("password");
-      setPassword("");
-    } catch (caught) {
-      setError(caught instanceof ApiError ? caught.message : "Falha ao criar conta.");
-    } finally { setSaving(false); }
-  }
-
-  async function submitCodeLogin(event: FormEvent) {
-    event.preventDefault();
-    if (!codeSent) return handleSendCode();
-    setSaving(true);
-    setError("");
-    try {
-      await api.verifyAuthCodeLogin({ email, code });
-      await onComplete();
-      navigate("/home", true);
-    } catch (caught) {
-      setError(caught instanceof ApiError ? caught.message : "Código incorreto ou expirado.");
-    } finally { setSaving(false); }
-  }
-
-  async function submitResetPassword(event: FormEvent) {
-    event.preventDefault();
-    if (!codeSent) return handleSendCode();
-    if (newPassword.length < 12) return setError("A nova senha deve ter pelo menos 12 caracteres.");
-    setSaving(true);
-    setError("");
-    try {
-      const res = await api.resetPasswordWithCode({ email, code, newPassword });
-      setNotice(res.message);
-      setMode("password");
-      setPassword(newPassword);
-      setCodeSent(false);
-      setCode("");
-    } catch (caught) {
-      setError(caught instanceof ApiError ? caught.message : "Falha ao redefinir a senha.");
-    } finally { setSaving(false); }
-  }
-
   return (
-    <AuthLayout
-      badge="Painel autohospedado"
-      title="Volte a testar ofertas."
-      subtitle="Entre no painel que roda dentro da sua própria conta Cloudflare."
-    >
-      <div className="auth-tab-row" style={{ display: "flex", gap: "8px", marginBottom: "16px" }}>
-        <button
-          type="button"
-          className={`button ${mode === "password" ? "primary" : "ghost"}`}
-          style={{ flex: 1, padding: "8px 12px", fontSize: "13px" }}
-          onClick={() => { setMode("password"); setError(""); setNotice(""); }}
-        >
-          Senha
-        </button>
-        <button
-          type="button"
-          className={`button ${mode === "code" ? "primary" : "ghost"}`}
-          style={{ flex: 1, padding: "8px 12px", fontSize: "13px" }}
-          onClick={() => { setMode("code"); setError(""); setNotice(""); }}
-        >
-          Código por E-mail
-        </button>
-        <button
-          type="button"
-          className={`button ${mode === "register" ? "primary" : "ghost"}`}
-          style={{ flex: 1, padding: "8px 12px", fontSize: "13px" }}
-          onClick={() => { setMode("register"); setError(""); setNotice(""); }}
-        >
-          Cadastro
-        </button>
-      </div>
-
-      {mode === "password" && (
-        <form className="form" onSubmit={(event) => void submitPassword(event)}>
-          <Field label="E-mail">
-            <input type="email" autoComplete="email" required value={email} onChange={(event) => setEmail(event.target.value)} />
-          </Field>
-          <Field label="Senha">
-            <div style={{ position: "relative" }}>
-              <input
-                type={showPassword ? "text" : "password"}
-                autoComplete="current-password"
-                required
-                value={password}
-                onChange={(event) => setPassword(event.target.value)}
-              />
-              <button
-                type="button"
-                style={{
-                  position: "absolute",
-                  right: "10px",
-                  top: "50%",
-                  transform: "translateY(-50%)",
-                  background: "none",
-                  border: "none",
-                  color: "#a1a1aa",
-                  cursor: "pointer"
-                }}
-                onClick={() => setShowPassword(!showPassword)}
-              >
-                {showPassword ? "👁️‍🗨️" : "👁️"}
-              </button>
-            </div>
-          </Field>
-          <div style={{ display: "flex", justifyContent: "flex-end", marginTop: "-8px", marginBottom: "8px" }}>
-            <button
-              type="button"
-              className="button ghost"
-              style={{ padding: 0, fontSize: "12px", color: "var(--muted)" }}
-              onClick={() => { setMode("reset"); setError(""); setNotice(""); setCodeSent(false); }}
-            >
-              Esqueceu a senha?
-            </button>
-          </div>
-          {error && <p className="form-error">{error}</p>}
-          {notice && <p className="notice success" style={{ padding: "8px 12px", fontSize: "13px" }}>{notice}</p>}
-          <button className="button primary full" disabled={saving}>{saving ? "Entrando…" : "Entrar na KRANO"}</button>
-        </form>
-      )}
-
-      {mode === "register" && (
-        <form className="form" onSubmit={(event) => void submitRegister(event)}>
-          <Field label="Nome completo">
-            <input type="text" autoComplete="name" required value={name} onChange={(event) => setName(event.target.value)} />
-          </Field>
-          <Field label="E-mail">
-            <input type="email" autoComplete="email" required value={email} onChange={(event) => setEmail(event.target.value)} />
-          </Field>
-          <Field label="Nova Senha">
-            <div style={{ position: "relative" }}>
-              <input
-                type={showPassword ? "text" : "password"}
-                autoComplete="new-password"
-                required
-                value={password}
-                onChange={(event) => setPassword(event.target.value)}
-              />
-              <button
-                type="button"
-                style={{
-                  position: "absolute",
-                  right: "10px",
-                  top: "50%",
-                  transform: "translateY(-50%)",
-                  background: "none",
-                  border: "none",
-                  color: "var(--muted)",
-                  cursor: "pointer"
-                }}
-                onClick={() => setShowPassword(!showPassword)}
-              >
-                {showPassword ? "👁️‍🗨️" : "👁️"}
-              </button>
-            </div>
-          </Field>
-          {error && <p className="form-error">{error}</p>}
-          <button className="button primary full" disabled={saving}>{saving ? "Cadastrando…" : "Criar nova conta"}</button>
-        </form>
-      )}
-
-      {mode === "code" && (
-        <form className="form" onSubmit={(event) => void submitCodeLogin(event)}>
-          <Field label="E-mail cadastrado">
-            <input type="email" autoComplete="email" required value={email} onChange={(event) => setEmail(event.target.value)} />
-          </Field>
-          {codeSent && (
-            <Field label="Código de 6 dígitos">
-              <input
-                type="text"
-                maxLength={6}
-                placeholder="Ex: 849201"
-                required
-                value={code}
-                onChange={(event) => setCode(event.target.value.replace(/\D/g, ""))}
-              />
-            </Field>
-          )}
-          {error && <p className="form-error">{error}</p>}
-          {notice && <p className="notice success" style={{ padding: "10px 14px", fontSize: "13px", background: "rgba(16, 185, 129, 0.1)", border: "1px solid rgba(16, 185, 129, 0.3)", borderRadius: "8px" }}>{notice}</p>}
-          {!codeSent ? (
-            <button type="button" className="button primary full" disabled={saving} onClick={() => void handleSendCode()}>
-              {saving ? "Gerando código…" : "Enviar código por e-mail"}
-            </button>
-          ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-              <button type="submit" className="button primary full" disabled={saving || code.length !== 6}>
-                {saving ? "Verificando…" : "Entrar com Código"}
-              </button>
-              <button type="button" className="button ghost full" style={{ fontSize: "12px" }} onClick={() => void handleSendCode()}>
-                Reenviar novo código
-              </button>
-            </div>
-          )}
-        </form>
-      )}
-
-      {mode === "reset" && (
-        <form className="form" onSubmit={(event) => void submitResetPassword(event)}>
-          <Field label="Seu E-mail">
-            <input type="email" autoComplete="email" required value={email} onChange={(event) => setEmail(event.target.value)} />
-          </Field>
-          {codeSent && (
-            <>
-              <Field label="Código de 6 dígitos">
-                <input
-                  type="text"
-                  maxLength={6}
-                  placeholder="Ex: 849201"
-                  required
-                  value={code}
-                  onChange={(event) => setCode(event.target.value.replace(/\D/g, ""))}
-                />
-              </Field>
-              <Field label="Nova Senha Forte (mínimo 12 caracteres)">
-                <input
-                  type={showPassword ? "text" : "password"}
-                  required
-                  minLength={12}
-                  value={newPassword}
-                  onChange={(event) => setNewPassword(event.target.value)}
-                />
-              </Field>
-            </>
-          )}
-          {error && <p className="form-error">{error}</p>}
-          {notice && <p className="notice success" style={{ padding: "10px 14px", fontSize: "13px", background: "rgba(16, 185, 129, 0.1)", border: "1px solid rgba(16, 185, 129, 0.3)", borderRadius: "8px" }}>{notice}</p>}
-          {!codeSent ? (
-            <button type="button" className="button primary full" disabled={saving} onClick={() => void handleSendCode()}>
-              {saving ? "Enviando código…" : "Solicitar código de redefinição"}
-            </button>
-          ) : (
-            <button type="submit" className="button primary full" disabled={saving || code.length !== 6 || newPassword.length < 12}>
-              {saving ? "Redefinindo…" : "Salvar nova senha e Entrar"}
-            </button>
-          )}
-          <div style={{ marginTop: "12px", textAlign: "center" }}>
-            <button type="button" className="button ghost" style={{ fontSize: "12px" }} onClick={() => setMode("password")}>
-              ← Voltar para o Login
-            </button>
-          </div>
-        </form>
-      )}
+    <AuthLayout badge="Painel autohospedado" title="Volte a testar ofertas." subtitle="Entre no painel que roda dentro da sua própria conta Cloudflare.">
+      <form className="form" onSubmit={(event) => void submit(event)}>
+        <Field label="E-mail"><input type="email" autoComplete="email" required value={email} onChange={(event) => setEmail(event.target.value)} /></Field>
+        <Field label="Senha"><input type="password" autoComplete="current-password" required value={password} onChange={(event) => setPassword(event.target.value)} /></Field>
+        {error && <p className="form-error">{error}</p>}
+        <button className="button primary full" disabled={saving}>{saving ? "Entrando…" : "Entrar na KRANO"}</button>
+      </form>
       <Security />
     </AuthLayout>
   );

@@ -100,37 +100,35 @@ function emptyProvider(env: Env): ProviderConfig {
 
 function normalizeProvider(value: string | null | undefined, env: Env): ProviderConfig {
   const legacy = safeJson<Partial<ProviderConfig>>(value, {});
-  const hasAccount = Boolean(env.CLOUDFLARE_ACCOUNT_ID);
-  const configured = legacy.configured === true || hasAccount;
-  const connected = legacy.connected === true || hasAccount;
+  const configured = legacy.configured === true;
   const authMode =
     legacy.authMode === "oauth" || legacy.authMode === "legacy_token"
       ? legacy.authMode
-      : hasAccount
-        ? "oauth"
+      : configured && Boolean(env.CLOUDFLARE_API_TOKEN)
+        ? "legacy_token"
         : "none";
   return {
     ...emptyProvider(env),
     ...legacy,
     configured,
-    connected,
+    connected: legacy.connected === true || (configured && authMode === "legacy_token"),
     authMode,
-    accountId: typeof legacy.accountId === "string" && legacy.accountId ? legacy.accountId : env.CLOUDFLARE_ACCOUNT_ID || "",
-    accountName: typeof legacy.accountName === "string" && legacy.accountName ? legacy.accountName : hasAccount ? "Cloudflare" : "",
+    accountId: typeof legacy.accountId === "string" ? legacy.accountId : "",
+    accountName: typeof legacy.accountName === "string" ? legacy.accountName : "",
     workerName:
       typeof legacy.workerName === "string" && legacy.workerName ? legacy.workerName : env.WORKER_NAME,
-    scopes: Array.isArray(legacy.scopes) && legacy.scopes.length > 0
+    scopes: Array.isArray(legacy.scopes)
       ? legacy.scopes.filter((scope): scope is string => typeof scope === "string")
-      : [...OAUTH_SCOPES],
+      : [],
     permissionVersion:
       typeof legacy.permissionVersion === "number" &&
       Number.isInteger(legacy.permissionVersion) &&
       legacy.permissionVersion >= 0
         ? legacy.permissionVersion
-        : OAUTH_PERMISSION_VERSION,
+        : 0,
     expiresAt: typeof legacy.expiresAt === "string" ? legacy.expiresAt : null,
-    connectedAt: typeof legacy.connectedAt === "string" ? legacy.connectedAt : new Date().toISOString(),
-    lastCheckedAt: typeof legacy.lastCheckedAt === "string" ? legacy.lastCheckedAt : new Date().toISOString()
+    connectedAt: typeof legacy.connectedAt === "string" ? legacy.connectedAt : null,
+    lastCheckedAt: typeof legacy.lastCheckedAt === "string" ? legacy.lastCheckedAt : null
   };
 }
 
@@ -155,17 +153,16 @@ async function writeProvider(env: Env, config: ProviderConfig): Promise<void> {
 
 export async function providerStatus(env: Env) {
   const provider = await providerConfig(env);
-  const hasAccount = Boolean(env.CLOUDFLARE_ACCOUNT_ID);
   const tokenAvailable =
     provider.authMode === "oauth"
-      ? Boolean(env.CLOUDFLARE_OAUTH_ACCESS_TOKEN) || hasAccount
-      : Boolean(env.CLOUDFLARE_API_TOKEN) || hasAccount;
+      ? Boolean(env.CLOUDFLARE_OAUTH_ACCESS_TOKEN)
+      : Boolean(env.CLOUDFLARE_API_TOKEN);
   return {
     configured: provider.configured,
     connected: provider.connected,
     ready: provider.connected && tokenAvailable,
     authMode: provider.authMode,
-    accountName: provider.accountName || "Cloudflare",
+    accountName: provider.accountName,
     workerName: provider.workerName,
     scopes: provider.scopes,
     zoneImportReady:

@@ -30,7 +30,6 @@ import {
   withSecurityHeaders
 } from "./http";
 import { handleOperationsApi, handleWebhook } from "./operations";
-import { safeJson } from "./platform";
 import { servePublicPage } from "./public-page";
 import { handlePublicTrackingApi } from "./tracking";
 
@@ -68,20 +67,17 @@ async function handleSetupComplete(request: Request, env: Env): Promise<Response
   if (!parsed.success) {
     return errorResponse(400, "VALIDATION_ERROR", "Revise os dados informados.", parsed.error.flatten());
   }
+  const tokenHash = await sha256(parsed.data.token);
+  const setupToken = await env.DB.prepare(
+    `SELECT id FROM setup_tokens
+     WHERE token_hash = ? AND used_at IS NULL AND expires_at > datetime('now') LIMIT 1`
+  )
+    .bind(tokenHash)
+    .first<SetupTokenRow>();
+  if (!setupToken) return errorResponse(403, "SETUP_TOKEN_INVALID", "Link de configuração inválido ou expirado.");
+
   const userCount = await env.DB.prepare("SELECT COUNT(*) AS count FROM users").first<number>("count");
   if ((userCount ?? 0) > 0) return errorResponse(409, "ALREADY_INSTALLED", "Administrador já criado.");
-
-  let setupTokenId: string | null = null;
-  if (parsed.data.token) {
-    const tokenHash = await sha256(parsed.data.token);
-    const tokenRow = await env.DB.prepare(
-      `SELECT id FROM setup_tokens
-       WHERE token_hash = ? AND used_at IS NULL AND expires_at > datetime('now') LIMIT 1`
-    )
-      .bind(tokenHash)
-      .first<SetupTokenRow>();
-    if (tokenRow) setupTokenId = tokenRow.id;
-  }
 
   const password = await hashPassword(parsed.data.password);
   const userId = randomId();
@@ -90,8 +86,7 @@ async function handleSetupComplete(request: Request, env: Env): Promise<Response
     version: "0.1.0",
     installedAt: new Date().toISOString()
   });
-
-  const batchQueries = [
+  await env.DB.batch([
     env.DB.prepare(
       `INSERT INTO users(id, name, email, password_hash, password_salt, password_iterations, role)
        VALUES (?, ?, ?, ?, ?, ?, 'owner')`
@@ -103,21 +98,16 @@ async function handleSetupComplete(request: Request, env: Env): Promise<Response
       password.salt,
       password.iterations
     ),
+    env.DB.prepare("UPDATE setup_tokens SET used_at = datetime('now') WHERE id = ?").bind(
+      setupToken.id
+    ),
     env.DB.prepare(
       "UPDATE installation_settings SET value_json = ?, updated_at = datetime('now') WHERE key = 'installation'"
     ).bind(installedJson),
     env.DB.prepare(
       "INSERT INTO audit_logs(id, user_id, action, entity_type, entity_id) VALUES (?, ?, 'installation.completed', 'user', ?)"
     ).bind(randomId(), userId, userId)
-  ];
-
-  if (setupTokenId) {
-    batchQueries.push(
-      env.DB.prepare("UPDATE setup_tokens SET used_at = datetime('now') WHERE id = ?").bind(setupTokenId)
-    );
-  }
-
-  await env.DB.batch(batchQueries);
+  ]);
   const session = await createSession(request, env, userId);
   return json(
     { ok: true, redirect: "/home" },
@@ -161,181 +151,6 @@ async function handleLogin(request: Request, env: Env): Promise<Response> {
     { user: { id: user.id, name: user.name, email: user.email, role: user.role } },
     { headers: { "Set-Cookie": session.cookie } }
   );
-}
-
-async function handleRegister(request: Request, env: Env): Promise<Response> {
-  if (!requireSameOrigin(request)) return errorResponse(403, "ORIGIN_INVALID", "Origem inválida.");
-  const body = safeJson<{ name?: string; email?: string; password?: string }>(await request.text(), {});
-  const name = (body.name ?? "").trim();
-  const email = (body.email ?? "").trim().toLowerCase();
-  const passwordInput = body.password ?? "";
-
-  if (name.length < 2 || !email || !email.includes("@") || passwordInput.length < 12) {
-    return errorResponse(400, "VALIDATION_ERROR", "Preencha todos os campos corretamente (senha mínima de 12 caracteres).");
-  }
-
-  const existing = await findUserByEmail(env, email);
-  if (existing) {
-    return errorResponse(409, "EMAIL_IN_USE", "Este e-mail já está em uso.");
-  }
-
-  const id = randomId();
-  const password = await hashPassword(passwordInput);
-
-  await env.DB.prepare(
-    `INSERT INTO users(id, name, email, password_hash, password_salt, password_iterations, role)
-     VALUES (?, ?, ?, ?, ?, ?, 'editor')`
-  ).bind(
-    id,
-    name,
-    email,
-    password.hash,
-    password.salt,
-    password.iterations
-  ).run();
-
-  await env.DB.prepare(
-    "INSERT INTO audit_logs(id, user_id, action, entity_type, entity_id) VALUES (?, ?, 'user.register', 'user', ?)"
-  ).bind(randomId(), id, id).run();
-
-  return json({ ok: true, message: "Conta criada com sucesso! Faça login para continuar." });
-}
-
-async function handleSendAuthCode(request: Request, env: Env & { RESEND_API_KEY?: string }): Promise<Response> {
-  if (!requireSameOrigin(request)) return errorResponse(403, "ORIGIN_INVALID", "Origem inválida.");
-  const body = safeJson<{ email?: string }>(await request.text(), {});
-  const email = (body.email ?? "").trim().toLowerCase();
-  if (!email || !email.includes("@")) {
-    return errorResponse(400, "VALIDATION_ERROR", "Informe um e-mail válido.");
-  }
-
-  // Verifica configuracao do provedor de e-mail (Resend)
-  if (!env.RESEND_API_KEY) {
-    return errorResponse(500, "EMAIL_NOT_CONFIGURED", "Provedor de e-mail não configurado. Adicione RESEND_API_KEY no painel da Cloudflare.");
-  }
-
-  const user = await findUserByEmail(env, email);
-  if (!user || user.disabled_at) {
-    return errorResponse(404, "USER_NOT_FOUND", "Nenhuma conta encontrada com este e-mail.");
-  }
-  const code = String(Math.floor(100000 + Math.random() * 900000));
-  const codeHash = await sha256(code);
-  const id = randomId();
-  await env.DB.prepare(
-    `INSERT INTO email_auth_codes(id, email, code_hash, expires_at)
-     VALUES (?, ?, ?, datetime('now', '+15 minutes'))`
-  ).bind(id, email, codeHash).run();
-
-  // Enviar e-mail usando a API do Resend
-  const emailResponse = await fetch("https://api.resend.com/emails", {
-    method: "POST",
-    headers: {
-      "Authorization": `Bearer ${env.RESEND_API_KEY}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      from: "Autenticação <noreply@resend.dev>", // Pode ser sobrescrito se o usuario configurar um dominio verificado
-      to: email,
-      subject: "Seu código de acesso",
-      html: `
-        <div style="font-family: sans-serif; max-width: 500px; margin: 0 auto;">
-          <h2>Código de Acesso</h2>
-          <p>Você solicitou um código para entrar no painel.</p>
-          <div style="background: #f4f4f5; padding: 20px; font-size: 24px; text-align: center; letter-spacing: 4px; font-weight: bold; border-radius: 8px; margin: 20px 0;">
-            ${code}
-          </div>
-          <p>Se você não solicitou este código, por favor ignore este e-mail.</p>
-        </div>
-      `
-    })
-  });
-
-  if (!emailResponse.ok) {
-    return errorResponse(500, "EMAIL_SEND_FAILED", "Falha ao enviar e-mail. Verifique se a RESEND_API_KEY está correta.");
-  }
-
-  return json({
-    ok: true,
-    message: "Código enviado para seu e-mail com sucesso."
-  });
-}
-
-async function handleVerifyAuthCodeLogin(request: Request, env: Env): Promise<Response> {
-  if (!requireSameOrigin(request)) return errorResponse(403, "ORIGIN_INVALID", "Origem inválida.");
-  const body = safeJson<{ email?: string; code?: string }>(await request.text(), {});
-  const email = (body.email ?? "").trim().toLowerCase();
-  const code = (body.code ?? "").trim();
-  if (!email || !code || code.length !== 6) {
-    return errorResponse(400, "VALIDATION_ERROR", "E-mail e código de 6 dígitos são obrigatórios.");
-  }
-  const user = await findUserByEmail(env, email);
-  if (!user || user.disabled_at) {
-    return errorResponse(401, "INVALID_CREDENTIALS", "Conta não encontrada.");
-  }
-  const codeHash = await sha256(code);
-  const authCodeRow = await env.DB.prepare(
-    `SELECT id FROM email_auth_codes
-     WHERE email = ? AND code_hash = ? AND used_at IS NULL AND expires_at > datetime('now')
-     ORDER BY created_at DESC LIMIT 1`
-  ).bind(email, codeHash).first<{ id: string }>();
-
-  if (!authCodeRow) {
-    return errorResponse(401, "INVALID_CODE", "Código incorreto ou expirado. Solicite um novo código.");
-  }
-
-  await env.DB.batch([
-    env.DB.prepare("UPDATE email_auth_codes SET used_at = datetime('now') WHERE id = ?").bind(authCodeRow.id),
-    env.DB.prepare("UPDATE users SET last_login_at = datetime('now') WHERE id = ?").bind(user.id),
-    env.DB.prepare(
-      "INSERT INTO audit_logs(id, user_id, action, entity_type, entity_id) VALUES (?, ?, 'auth.login_code', 'user', ?)"
-    ).bind(randomId(), user.id, user.id)
-  ]);
-
-  const session = await createSession(request, env, user.id);
-  return json(
-    { user: { id: user.id, name: user.name, email: user.email, role: user.role } },
-    { headers: { "Set-Cookie": session.cookie } }
-  );
-}
-
-async function handleResetPasswordWithCode(request: Request, env: Env): Promise<Response> {
-  if (!requireSameOrigin(request)) return errorResponse(403, "ORIGIN_INVALID", "Origem inválida.");
-  const body = safeJson<{ email?: string; code?: string; newPassword?: string }>(await request.text(), {});
-  const email = (body.email ?? "").trim().toLowerCase();
-  const code = (body.code ?? "").trim();
-  const newPassword = body.newPassword ?? "";
-  if (!email || !code || code.length !== 6 || newPassword.length < 12) {
-    return errorResponse(400, "VALIDATION_ERROR", "Preencha todos os campos corretamente (senha mínima de 12 caracteres).");
-  }
-  const user = await findUserByEmail(env, email);
-  if (!user || user.disabled_at) {
-    return errorResponse(404, "USER_NOT_FOUND", "Conta não encontrada.");
-  }
-  const codeHash = await sha256(code);
-  const authCodeRow = await env.DB.prepare(
-    `SELECT id FROM email_auth_codes
-     WHERE email = ? AND code_hash = ? AND used_at IS NULL AND expires_at > datetime('now')
-     ORDER BY created_at DESC LIMIT 1`
-  ).bind(email, codeHash).first<{ id: string }>();
-
-  if (!authCodeRow) {
-    return errorResponse(401, "INVALID_CODE", "Código incorreto ou expirado. Solicite um novo código.");
-  }
-
-  const password = await hashPassword(newPassword);
-  await env.DB.batch([
-    env.DB.prepare("UPDATE email_auth_codes SET used_at = datetime('now') WHERE id = ?").bind(authCodeRow.id),
-    env.DB.prepare(
-      `UPDATE users
-       SET password_hash = ?, password_salt = ?, password_iterations = ?, updated_at = datetime('now')
-       WHERE id = ?`
-    ).bind(password.hash, password.salt, password.iterations, user.id),
-    env.DB.prepare(
-      "INSERT INTO audit_logs(id, user_id, action, entity_type, entity_id) VALUES (?, ?, 'auth.password_reset', 'user', ?)"
-    ).bind(randomId(), user.id, user.id)
-  ]);
-
-  return json({ ok: true, message: "Senha redefinida com sucesso! Faça login com a nova senha." });
 }
 
 async function handleChangePassword(
@@ -424,22 +239,6 @@ async function handleApi(
 
   if (request.method === "POST" && url.pathname === "/api/auth/login") {
     return handleLogin(request, env);
-  }
-
-  if (request.method === "POST" && url.pathname === "/api/auth/register") {
-    return handleRegister(request, env);
-  }
-
-  if (request.method === "POST" && url.pathname === "/api/auth/code/send") {
-    return handleSendAuthCode(request, env);
-  }
-
-  if (request.method === "POST" && url.pathname === "/api/auth/code/login") {
-    return handleVerifyAuthCodeLogin(request, env);
-  }
-
-  if (request.method === "POST" && url.pathname === "/api/auth/code/reset-password") {
-    return handleResetPasswordWithCode(request, env);
   }
 
   if (request.method === "POST" && url.pathname === "/api/auth/logout") {

@@ -321,8 +321,6 @@ export function Settings() {
   const [funnelId, setFunnelId] = useState("");
   const [message, setMessage] = useState("");
   const [secret, setSecret] = useState<{ url: string; value: string } | null>(null);
-  const [resendApiKey, setResendApiKey] = useState("");
-  const [saving, setSaving] = useState(false);
 
   async function load() {
     try {
@@ -357,32 +355,23 @@ export function Settings() {
 
   async function savePixels(event: FormEvent) {
     event.preventDefault();
-    setSaving(true);
     try { await api.savePixels(offerId, { metaPixelId, ga4Id }); setMessage("Pixels validados e salvos."); await load(); }
     catch (caught) { setMessage(caught instanceof Error ? caught.message : "Falha nos pixels."); }
-    finally { setSaving(false); }
   }
   async function createCheckout(event: FormEvent) {
     event.preventDefault();
-    setSaving(true);
     try { await api.createCheckout({ offerId, name: checkoutName, checkoutUrl }); setMessage("Checkout externo conectado."); await load(); }
     catch (caught) { setMessage(caught instanceof Error ? caught.message : "Falha no checkout."); }
-    finally { setSaving(false); }
   }
   async function createWebhook(checkoutId: string) {
-    setSaving(true);
-    try {
-      const result = await api.createWebhook(checkoutId);
-      setSecret({ url: result.webhook.url, value: result.webhook.secret });
-      setMessage("Webhook criado. Copie o segredo agora; ele não será mostrado novamente.");
-      await load();
-    } catch (caught) { setMessage(caught instanceof Error ? caught.message : "Falha ao criar webhook."); }
-    finally { setSaving(false); }
+    const result = await api.createWebhook(checkoutId);
+    setSecret({ url: result.webhook.url, value: result.webhook.secret });
+    setMessage("Webhook criado. Copie o segredo agora; ele não será mostrado novamente.");
+    await load();
   }
   async function createExperiment(event: FormEvent) {
     event.preventDefault();
     if (versions.length < 2) return setMessage("Publique pelo menos duas versões da mesma página.");
-    setSaving(true);
     try {
       await api.createExperiment({ funnelId, name: `Teste ${new Date().toLocaleDateString("pt-BR")}`, variants: versions.slice(0, 2).reverse().map((version, index) => ({ name: `Variante ${index ? "B" : "A"} · v${version.versionNumber}`, pageVersionId: version.id })) });
       setMessage("Teste A/B criado. Inicie quando estiver pronto.");
@@ -390,36 +379,23 @@ export function Settings() {
     } catch (caught) { setMessage(caught instanceof Error ? caught.message : "Falha no teste."); }
   }
   async function toggleExperiment(id: string, status: string) {
-    setSaving(true);
-    try {
-      await api.updateExperiment(id, { status });
-      await load();
-    } catch (caught) { setMessage(caught instanceof Error ? caught.message : "Falha ao atualizar experimento."); }
-    finally { setSaving(false); }
+    await api.updateExperiment(id, { status });
+    await load();
   }
   if (!settings) return <><PageHeader eyebrow="Configurações" title="Integrações e experimentos" subtitle="Carregando…" />{message && <Notice tone="error">{message}</Notice>}<div className="panel skeleton tall" /></>;
-  async function saveEmail(event: FormEvent) {
-    event.preventDefault();
-    setSaving(true);
-    try { await api.saveEmailSettings({ resendApiKey }); setMessage("Configuração de e-mail salva."); await load(); setResendApiKey(""); }
-    catch (caught) { setMessage(caught instanceof Error ? caught.message : "Falha ao salvar e-mail."); }
-    finally { setSaving(false); }
-  }
-
   return (
     <>
       <PageHeader eyebrow="Configurações" title="Conecte só o necessário." subtitle="Checkout externo, pixels com diagnóstico, webhooks idempotentes e A/B indicativo." />
       {message && <Notice tone={message.includes("Falha") || message.includes("pelo menos") ? "warning" : "success"}>{message}</Notice>}
       <section className="settings-grid">
-        <article className="panel"><span className="eyebrow">PIXELS</span><h2>Meta e GA4</h2><form className="form" onSubmit={(event) => void savePixels(event)}><label className="field"><span>Oferta</span><select required value={offerId} onChange={(event) => setOfferId(event.target.value)}>{settings.offers.map((offer) => <option key={offer.id} value={offer.id}>{offer.name}</option>)}</select></label><label className="field"><span>Meta Pixel ID</span><input value={metaPixelId} onChange={(event) => setMetaPixelId(event.target.value)} placeholder="Somente números" /></label><label className="field"><span>GA4 Measurement ID</span><input value={ga4Id} onChange={(event) => setGa4Id(event.target.value.toUpperCase())} placeholder="G-XXXXXXXX" /></label><button className="button secondary" disabled={saving}>{saving ? "Salvando..." : "Validar e salvar"}</button></form></article>
-        <article className="panel"><span className="eyebrow">AUTENTICAÇÃO</span><h2>Servidor de E-mail (Resend)</h2><form className="form" onSubmit={(event) => void saveEmail(event)}><label className="field"><span>Resend API Key</span><input type="password" value={resendApiKey} placeholder="re_..." onChange={(e) => setResendApiKey(e.target.value)} /></label><p className="muted">Deixe em branco para remover. Obrigatório para login por código e redefinição de senha.</p><button className="button secondary" disabled={saving}>{saving ? "Salvando..." : "Salvar chave de E-mail"}</button></form></article>
-        <article className="panel"><span className="eyebrow">CHECKOUT EXTERNO</span><h2>Destino da oferta</h2><form className="form" onSubmit={(event) => void createCheckout(event)}><label className="field"><span>Nome</span><input required value={checkoutName} onChange={(event) => setCheckoutName(event.target.value)} /></label><label className="field"><span>URL HTTPS</span><input type="url" required value={checkoutUrl} onChange={(event) => setCheckoutUrl(event.target.value)} placeholder="https://…" /></label><button className="button secondary" disabled={saving}>{saving ? "Salvando..." : "Conectar checkout"}</button></form></article>
+        <article className="panel"><span className="eyebrow">PIXELS</span><h2>Meta e GA4</h2><form className="form" onSubmit={(event) => void savePixels(event)}><label className="field"><span>Oferta</span><select required value={offerId} onChange={(event) => setOfferId(event.target.value)}>{settings.offers.map((offer) => <option key={offer.id} value={offer.id}>{offer.name}</option>)}</select></label><label className="field"><span>Meta Pixel ID</span><input value={metaPixelId} onChange={(event) => setMetaPixelId(event.target.value)} placeholder="Somente números" /></label><label className="field"><span>GA4 Measurement ID</span><input value={ga4Id} onChange={(event) => setGa4Id(event.target.value.toUpperCase())} placeholder="G-XXXXXXXX" /></label><button className="button secondary">Validar e salvar</button></form></article>
+        <article className="panel"><span className="eyebrow">CHECKOUT EXTERNO</span><h2>Destino da oferta</h2><form className="form" onSubmit={(event) => void createCheckout(event)}><label className="field"><span>Nome</span><input required value={checkoutName} onChange={(event) => setCheckoutName(event.target.value)} /></label><label className="field"><span>URL HTTPS</span><input type="url" required value={checkoutUrl} onChange={(event) => setCheckoutUrl(event.target.value)} placeholder="https://…" /></label><button className="button secondary">Conectar checkout</button></form></article>
       </section>
       <section className="settings-grid">
-        <article className="panel"><div className="panel-header"><div><span className="eyebrow">WEBHOOKS</span><h2>Conversões</h2></div></div>{settings.checkouts.length ? <div className="table-list">{settings.checkouts.map((checkout) => <div key={checkout.id}><div><strong>{checkout.name}</strong><small>{checkout.checkoutUrl}</small></div><button onClick={() => void createWebhook(checkout.id)} disabled={saving}>{saving ? "..." : "Gerar webhook"}</button></div>)}</div> : <Empty icon="↗" title="Conecte um checkout primeiro" text="O endpoint registra conversões por evento externo." />}{secret && <div className="secret-box"><strong>Copie agora</strong><label>URL<input readOnly value={secret.url} onFocus={(event) => event.currentTarget.select()} /></label><label>Secret<input readOnly value={secret.value} onFocus={(event) => event.currentTarget.select()} /></label><small>Envie no cabeçalho X-Funnel-Zero-Secret.</small></div>}</article>
-        <article className="panel"><span className="eyebrow">TESTE A/B</span><h2>Versões publicadas</h2><form className="form" onSubmit={(event) => void createExperiment(event)}><label className="field"><span>Funil</span><select value={funnelId} onChange={(event) => setFunnelId(event.target.value)}>{funnels.map((funnel) => <option key={funnel.id} value={funnel.id}>{funnel.name}</option>)}</select></label><label className="field"><span>Página</span><select value={pageId} onChange={(event) => setPageId(event.target.value)}>{pages.map((page) => <option key={page.id} value={page.id}>{page.name}</option>)}</select></label><p className="muted">{versions.length} versão(ões) publicada(s). As duas mais recentes serão A/B 50/50.</p><button className="button secondary" disabled={saving || versions.length < 2}>{saving ? "Iniciando..." : "Criar teste"}</button></form></article>
+        <article className="panel"><div className="panel-header"><div><span className="eyebrow">WEBHOOKS</span><h2>Conversões</h2></div></div>{settings.checkouts.length ? <div className="table-list">{settings.checkouts.map((checkout) => <div key={checkout.id}><div><strong>{checkout.name}</strong><small>{checkout.checkoutUrl}</small></div><button onClick={() => void createWebhook(checkout.id)}>Gerar webhook</button></div>)}</div> : <Empty icon="↗" title="Conecte um checkout primeiro" text="O endpoint registra conversões por evento externo." />}{secret && <div className="secret-box"><strong>Copie agora</strong><label>URL<input readOnly value={secret.url} onFocus={(event) => event.currentTarget.select()} /></label><label>Secret<input readOnly value={secret.value} onFocus={(event) => event.currentTarget.select()} /></label><small>Envie no cabeçalho X-Funnel-Zero-Secret.</small></div>}</article>
+        <article className="panel"><span className="eyebrow">TESTE A/B</span><h2>Versões publicadas</h2><form className="form" onSubmit={(event) => void createExperiment(event)}><label className="field"><span>Funil</span><select value={funnelId} onChange={(event) => setFunnelId(event.target.value)}>{funnels.map((funnel) => <option key={funnel.id} value={funnel.id}>{funnel.name}</option>)}</select></label><label className="field"><span>Página</span><select value={pageId} onChange={(event) => setPageId(event.target.value)}>{pages.map((page) => <option key={page.id} value={page.id}>{page.name}</option>)}</select></label><p className="muted">{versions.length} versão(ões) publicada(s). As duas mais recentes serão A/B 50/50.</p><button className="button secondary" disabled={versions.length < 2}>Criar teste</button></form></article>
       </section>
-      <section className="panel"><div className="panel-header"><div><span className="eyebrow">EXPERIMENTOS</span><h2>Leitura indicativa</h2></div><span className="muted">Amostra pequena não prova vencedor</span></div>{settings.experiments.length ? <div className="experiment-list">{settings.experiments.map((experiment) => <article key={experiment.id}><div><strong>{experiment.name}</strong><StatusPill status={experiment.status} /></div>{experiment.variants.map((variant) => <p key={variant.id}>{variant.name}: {variant.views} views · {variant.conversions} conversões</p>)}<button onClick={() => void toggleExperiment(experiment.id, experiment.status === "running" ? "paused" : "running")} disabled={saving}>{experiment.status === "running" ? "Pausar" : "Iniciar"}</button></article>)}</div> : <Empty icon="A/B" title="Nenhum teste criado" text="Publique duas versões da mesma página para comparar." />}</section>
+      <section className="panel"><div className="panel-header"><div><span className="eyebrow">EXPERIMENTOS</span><h2>Leitura indicativa</h2></div><span className="muted">Amostra pequena não prova vencedor</span></div>{settings.experiments.length ? <div className="experiment-list">{settings.experiments.map((experiment) => <article key={experiment.id}><div><strong>{experiment.name}</strong><StatusPill status={experiment.status} /></div>{experiment.variants.map((variant) => <p key={variant.id}>{variant.name}: {variant.views} views · {variant.conversions} conversões</p>)}<button onClick={() => void toggleExperiment(experiment.id, experiment.status === "running" ? "paused" : "running")}>{experiment.status === "running" ? "Pausar" : "Iniciar"}</button></article>)}</div> : <Empty icon="A/B" title="Nenhum teste criado" text="Publique duas versões da mesma página para comparar." />}</section>
       <section className="panel danger-zone"><span className="eyebrow">OPERAÇÃO</span><h2>Backup, restauração e remoção</h2><p>Comandos locais possuem confirmação explícita e nunca incluem secrets:</p><div className="command-row"><code>npm run backup</code><code>npm run restore -- "pasta"</code><code>npm run uninstall</code></div></section>
     </>
   );

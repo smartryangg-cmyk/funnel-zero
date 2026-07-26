@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -85,21 +85,6 @@ function runNpm(npmArgs, options = {}) {
   return result;
 }
 
-function openBrowser(targetUrl) {
-  try {
-    const platform = process.platform;
-    if (platform === "win32") {
-      spawnSync("rundll32", ["url.dll,FileProtocolHandler", targetUrl], { stdio: "ignore" });
-    } else if (platform === "darwin") {
-      spawnSync("open", [targetUrl], { stdio: "ignore" });
-    } else {
-      spawnSync("xdg-open", [targetUrl], { stdio: "ignore" });
-    }
-  } catch {
-    // Ignora falhas ao tentar abrir navegador automaticamente
-  }
-}
-
 function stripAnsi(value) {
   return value.replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, "");
 }
@@ -170,7 +155,24 @@ async function chooseAccount() {
     line("  • criar o banco D1 e a biblioteca R2;");
     line("  • configurar os domínios que você escolher.");
     line();
-    runWrangler(["login", "--callback-host", "127.0.0.1"], { interactive: true });
+    runWrangler(
+      [
+        "login",
+        "--use-keyring",
+        "--scopes",
+        [
+          "account:read",
+          "user:read",
+          "workers:write",
+          "workers_routes:write",
+          "workers_scripts:write",
+          "d1:write",
+          "zone:read",
+          "offline_access"
+        ].join(" ")
+      ],
+      { interactive: true }
+    );
     whoami = runWrangler(["whoami"], { quiet: true });
     clean = stripAnsi(`${whoami.stdout}\n${whoami.stderr}`);
     accounts = parseAccounts(clean);
@@ -279,22 +281,11 @@ function remoteInstallationComplete(databaseName, accountId) {
   }
 }
 
-function insertSetupToken(databaseName, tokenHash, accountId, workerName = "krano-app") {
+function insertSetupToken(databaseName, tokenHash, accountId) {
   const sqlPath = join(stateDir, "issue-setup-token.sql");
-  const providerConfigJson = JSON.stringify({
-    configured: true,
-    connected: false,
-    authMode: "none",
-    accountId: accountId,
-    accountName: `Cloudflare (${accountId.slice(0, 8)})`,
-    workerName: workerName,
-    scopes: [],
-    permissionVersion: 2
-  }).replace(/'/g, "''");
   const statement = [
     "UPDATE setup_tokens SET used_at = datetime('now') WHERE used_at IS NULL;",
-    `INSERT INTO setup_tokens(id, token_hash, expires_at) VALUES ('${randomUUID()}', '${tokenHash}', datetime('now', '+2 hours'));`,
-    `INSERT INTO installation_settings(key, value_json, updated_at) VALUES ('domain_provider', '${providerConfigJson}', datetime('now')) ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = datetime('now');`
+    `INSERT INTO setup_tokens(id, token_hash, expires_at) VALUES ('${randomUUID()}', '${tokenHash}', datetime('now', '+2 hours'));`
   ].join("\n");
   writeFileSync(sqlPath, `${statement}\n`, "utf8");
   try {
@@ -342,23 +333,23 @@ async function rollback(created, accountId, databaseName, bucketName, workerName
 async function waitForHealth(deploymentUrl) {
   const healthUrl = new URL("/api/health", deploymentUrl).toString();
   let lastError = "sem resposta";
-  for (let attempt = 1; attempt <= 20; attempt += 1) {
+  for (let attempt = 1; attempt <= 12; attempt += 1) {
     try {
       const response = await fetch(healthUrl, {
         headers: { Accept: "application/json" },
         signal: AbortSignal.timeout(10_000)
       });
-      if (response.ok) {
-        const payload = await response.json().catch(() => null);
-        if (payload?.ok === true) return;
+      const payload = await response.json();
+      if (response.ok && payload?.ok === true && payload?.freeOnly === true) {
+        return;
       }
       lastError = `HTTP ${response.status}`;
     } catch (error) {
       lastError = error instanceof Error ? error.message : String(error);
     }
-    await new Promise((resolvePromise) => setTimeout(resolvePromise, 1_500));
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 1_000));
   }
-  warn(`A URL pública ainda está propagando na Cloudflare (${lastError}). Abrindo o painel assim mesmo...`);
+  fail(`O deploy foi enviado, mas a verificação pública falhou: ${lastError}`);
 }
 
 async function setup() {
@@ -379,8 +370,8 @@ async function setup() {
 
   const previous = readManifest();
   const installationName = verifyPrefix(
-    await prompt("Nome da instalação", previous?.installationName ?? "krano-app"),
-    "krano-app"
+    await prompt("Nome da instalação", previous?.installationName ?? "krano-development"),
+    "krano-development"
   );
   const workerName = installationName;
   const databaseName = `${installationName}-db`;
@@ -417,13 +408,9 @@ async function setup() {
     });
     ok("Migrations aplicadas");
 
-    const isDev = args.has("--dev");
-    if (isDev) {
-      info("Executando testes e typecheck (modo dev)");
-      runNpm(["run", "typecheck"]);
-      runNpm(["run", "test"]);
-    }
-    info("Compilando a aplicação");
+    info("Executando testes, build e deploy dry-run");
+    runNpm(["run", "typecheck"]);
+    runNpm(["run", "test"]);
     runNpm(["run", "build"]);
     runWrangler(["deploy", "--dry-run"], { accountId, quiet: true });
     ok("Validação concluída");
@@ -458,7 +445,7 @@ async function setup() {
     } else {
       const setupToken = randomBytes(32).toString("base64url");
       const setupTokenHash = createHash("sha256").update(setupToken).digest("hex");
-      insertSetupToken(databaseName, setupTokenHash, accountId, workerName);
+      insertSetupToken(databaseName, setupTokenHash, accountId);
       setupUrl = `${deploymentUrl}/setup?token=${encodeURIComponent(setupToken)}`;
     }
 
@@ -501,10 +488,6 @@ async function setup() {
     if (setupUrl) {
       line(`${colors.dim}A URL expira em 2 horas e deixa de funcionar após o primeiro uso.${colors.reset}`);
     }
-
-    const targetUrl = setupUrl || `${deploymentUrl}/login`;
-    info("Abrindo o painel no seu navegador...");
-    openBrowser(targetUrl);
   } catch (error) {
     writeFileSync(configPath, originalConfig, "utf8");
     await rollback(created, accountId, databaseName, bucketName, workerName);

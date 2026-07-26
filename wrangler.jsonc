@@ -1,6 +1,6 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
-  "name": "krano-app",
+  "name": "krano-development",
   "workers_dev": true,
   "preview_urls": true,
   "main": "apps/worker/src/index.ts",
@@ -8,9 +8,6 @@
   "compatibility_flags": [
     "nodejs_compat"
   ],
-  "vars": {
-    "RESEND_API_KEY": ""
-  },
   "assets": {
     "directory": "./dist",
     "binding": "ASSETS",
@@ -20,21 +17,21 @@
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "krano-app-db",
-      "database_id": "8a2bc17c-cb9b-405b-b450-26e3a724238d",
+      "database_name": "krano-development-db",
+      "database_id": "00000000-0000-0000-0000-000000000000",
       "migrations_dir": "./migrations"
     }
   ],
   "r2_buckets": [
     {
       "binding": "MEDIA",
-      "bucket_name": "krano-app-media"
+      "bucket_name": "krano-development-media"
     }
   ],
   "vars": {
     "APP_NAME": "KRANO",
-    "WORKER_NAME": "krano-app",
-    "CLOUDFLARE_ACCOUNT_ID": "32fee24935342726907ccb6451984875",
+    "WORKER_NAME": "krano-development",
+    "CLOUDFLARE_ACCOUNT_ID": "",
     "ENVIRONMENT": "development",
     "FREE_ONLY": "true",
     "MAX_STORAGE_BYTES": "10737418240",

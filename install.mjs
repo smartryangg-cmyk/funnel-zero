@@ -51,9 +51,5 @@ if (!existsSync(cliPath)) {
 
 console.log("\nKRANO");
 console.log("Preparando uma instalação limpa e reproduzível…\n");
-const userArgs = process.argv.slice(2);
-const hasInteractive = userArgs.includes("--interactive");
-const setupArgs = hasInteractive ? userArgs.filter((a) => a !== "--interactive") : ["--yes", ...userArgs];
-
-run(process.execPath, [cliPath, "setup", ...setupArgs]);
-
+run(npmCommand, ["install", "--no-audit", "--no-fund"]);
+run(process.execPath, [cliPath, "setup", ...process.argv.slice(2)]);
