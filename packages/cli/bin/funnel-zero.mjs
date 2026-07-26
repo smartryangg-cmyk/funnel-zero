@@ -85,6 +85,21 @@ function runNpm(npmArgs, options = {}) {
   return result;
 }
 
+function openBrowser(targetUrl) {
+  try {
+    const platform = process.platform;
+    if (platform === "win32") {
+      spawnSync("cmd", ["/c", "start", "", targetUrl], { stdio: "ignore" });
+    } else if (platform === "darwin") {
+      spawnSync("open", [targetUrl], { stdio: "ignore" });
+    } else {
+      spawnSync("xdg-open", [targetUrl], { stdio: "ignore" });
+    }
+  } catch {
+    // Ignora falhas ao tentar abrir navegador automaticamente
+  }
+}
+
 function stripAnsi(value) {
   return value.replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, "");
 }
@@ -370,8 +385,8 @@ async function setup() {
 
   const previous = readManifest();
   const installationName = verifyPrefix(
-    await prompt("Nome da instalação", previous?.installationName ?? "krano-development"),
-    "krano-development"
+    await prompt("Nome da instalação", previous?.installationName ?? "krano-app"),
+    "krano-app"
   );
   const workerName = installationName;
   const databaseName = `${installationName}-db`;
@@ -408,9 +423,13 @@ async function setup() {
     });
     ok("Migrations aplicadas");
 
-    info("Executando testes, build e deploy dry-run");
-    runNpm(["run", "typecheck"]);
-    runNpm(["run", "test"]);
+    const isDev = args.has("--dev");
+    if (isDev) {
+      info("Executando testes e typecheck (modo dev)");
+      runNpm(["run", "typecheck"]);
+      runNpm(["run", "test"]);
+    }
+    info("Compilando a aplicação");
     runNpm(["run", "build"]);
     runWrangler(["deploy", "--dry-run"], { accountId, quiet: true });
     ok("Validação concluída");
@@ -488,6 +507,10 @@ async function setup() {
     if (setupUrl) {
       line(`${colors.dim}A URL expira em 2 horas e deixa de funcionar após o primeiro uso.${colors.reset}`);
     }
+
+    const targetUrl = setupUrl || `${deploymentUrl}/login`;
+    info("Abrindo o painel no seu navegador...");
+    openBrowser(targetUrl);
   } catch (error) {
     writeFileSync(configPath, originalConfig, "utf8");
     await rollback(created, accountId, databaseName, bucketName, workerName);
