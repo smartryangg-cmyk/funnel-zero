@@ -158,50 +158,6 @@ function verifyPrefix(value, fallback) {
   return withPrefix === "krano-" || withPrefix.length < 4 ? fallback : withPrefix;
 }
 
-function loginCloudflare() {
-  return new Promise((resolve, reject) => {
-    let opened = false;
-    const child = spawn(process.execPath, [wranglerBin, "login"], {
-      cwd: projectRoot,
-      env: process.env,
-      stdio: ["inherit", "pipe", "pipe"]
-    });
-
-    child.stdout.on("data", (data) => {
-      const text = data.toString();
-      output.write(text);
-      const match = text.match(/https:\/\/dash\.cloudflare\.com\/oauth2\/auth\?[^\s\r\n]+/i);
-      if (match && !opened) {
-        opened = true;
-        line();
-        line(`${colors.green}┌──────────────────────────────────────────────────────────────────┐${colors.reset}`);
-        line(`${colors.green}│ 🌐 NAVEGADOR ABERTO: CLIQUE EM "AUTORIZAR" NA PÁGINA DA CLOUDFLARE │${colors.reset}`);
-        line(`${colors.green}└──────────────────────────────────────────────────────────────────┘${colors.reset}`);
-        line();
-        openBrowser(match[0]);
-      }
-    });
-
-    child.stderr.on("data", (data) => {
-      const text = data.toString();
-      output.write(text);
-      const match = text.match(/https:\/\/dash\.cloudflare\.com\/oauth2\/auth\?[^\s\r\n]+/i);
-      if (match && !opened) {
-        opened = true;
-        line();
-        line(`${colors.green}┌──────────────────────────────────────────────────────────────────┐${colors.reset}`);
-        line(`${colors.green}│ 🌐 NAVEGADOR ABERTO: CLIQUE EM "AUTORIZAR" NA PÁGINA DA CLOUDFLARE │${colors.reset}`);
-        line(`${colors.green}└──────────────────────────────────────────────────────────────────┘${colors.reset}`);
-        line();
-        openBrowser(match[0]);
-      }
-    });
-
-    child.on("error", reject);
-    child.on("close", () => resolve());
-  });
-}
-
 async function chooseAccount() {
   let whoami = runWrangler(["whoami"], { quiet: true, allowFailure: true });
   let clean = stripAnsi(`${whoami.stdout}\n${whoami.stderr}`);
@@ -214,7 +170,7 @@ async function chooseAccount() {
     line("  • criar o banco D1 e a biblioteca R2;");
     line("  • configurar os domínios que você escolher.");
     line();
-    await loginCloudflare();
+    runWrangler(["login"], { interactive: true });
     whoami = runWrangler(["whoami"], { quiet: true });
     clean = stripAnsi(`${whoami.stdout}\n${whoami.stderr}`);
     accounts = parseAccounts(clean);
