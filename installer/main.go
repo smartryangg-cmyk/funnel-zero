@@ -338,7 +338,7 @@ func openBrowser(url string) {
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "windows":
-		cmd = exec.Command("powershell", "-NoProfile", "-Command", "Start-Process", fmt.Sprintf("'%s'", url))
+		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
 	case "darwin":
 		cmd = exec.Command("open", url)
 	default:

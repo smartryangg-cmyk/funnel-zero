@@ -89,8 +89,7 @@ function openBrowser(targetUrl) {
   try {
     const platform = process.platform;
     if (platform === "win32") {
-      const safeUrl = targetUrl.replace(/'/g, "''");
-      spawnSync("powershell", ["-NoProfile", "-Command", `Start-Process '${safeUrl}'`], { stdio: "ignore" });
+      spawnSync("rundll32", ["url.dll,FileProtocolHandler", targetUrl], { stdio: "ignore" });
     } else if (platform === "darwin") {
       spawnSync("open", [targetUrl], { stdio: "ignore" });
     } else {
