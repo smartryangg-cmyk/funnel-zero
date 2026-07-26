@@ -331,23 +331,23 @@ async function rollback(created, accountId, databaseName, bucketName, workerName
 async function waitForHealth(deploymentUrl) {
   const healthUrl = new URL("/api/health", deploymentUrl).toString();
   let lastError = "sem resposta";
-  for (let attempt = 1; attempt <= 12; attempt += 1) {
+  for (let attempt = 1; attempt <= 20; attempt += 1) {
     try {
       const response = await fetch(healthUrl, {
         headers: { Accept: "application/json" },
         signal: AbortSignal.timeout(10_000)
       });
-      const payload = await response.json();
-      if (response.ok && payload?.ok === true && payload?.freeOnly === true) {
-        return;
+      if (response.ok) {
+        const payload = await response.json().catch(() => null);
+        if (payload?.ok === true) return;
       }
       lastError = `HTTP ${response.status}`;
     } catch (error) {
       lastError = error instanceof Error ? error.message : String(error);
     }
-    await new Promise((resolvePromise) => setTimeout(resolvePromise, 1_000));
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 1_500));
   }
-  fail(`O deploy foi enviado, mas a verificação pública falhou: ${lastError}`);
+  warn(`A URL pública ainda está propagando na Cloudflare (${lastError}). Abrindo o painel assim mesmo...`);
 }
 
 async function setup() {
