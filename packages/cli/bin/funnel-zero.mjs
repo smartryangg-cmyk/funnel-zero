@@ -61,7 +61,7 @@ function runWrangler(wranglerArgs, options = {}) {
         ...(options.accountId ? { CLOUDFLARE_ACCOUNT_ID: options.accountId } : {})
       },
       input: options.input,
-      stdio: options.quiet ? ["pipe", "pipe", "pipe"] : ["pipe", "pipe", "pipe"]
+      stdio: options.interactive ? "inherit" : ["pipe", "pipe", "pipe"]
     }
   );
   const stdout = result.stdout?.toString() ?? "";
@@ -137,21 +137,59 @@ function verifyPrefix(value, fallback) {
     .replace(/[^a-z0-9-]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 48);
-  const withPrefix = normalized.startsWith("funnel-zero") ? normalized : `funnel-zero-${normalized}`;
-  return withPrefix === "funnel-zero-" || withPrefix.length < 4 ? fallback : withPrefix;
+  const withPrefix = normalized.startsWith("krano") || normalized.startsWith("funnel-zero")
+    ? normalized
+    : `krano-${normalized}`;
+  return withPrefix === "krano-" || withPrefix.length < 4 ? fallback : withPrefix;
 }
 
 async function chooseAccount() {
-  const whoami = runWrangler(["whoami"], { quiet: true });
-  const clean = stripAnsi(`${whoami.stdout}\n${whoami.stderr}`);
-  const accounts = [...clean.matchAll(/\b([a-f0-9]{32})\b/gi)].map((match) => match[1]);
-  const unique = [...new Set(accounts)];
-  if (unique.length === 0) fail("Nenhuma conta Cloudflare autenticada. Execute `npx wrangler login`.");
-  if (unique.length === 1) return unique[0];
+  let whoami = runWrangler(["whoami"], { quiet: true, allowFailure: true });
+  let clean = stripAnsi(`${whoami.stdout}\n${whoami.stderr}`);
+  let accounts = parseAccounts(clean);
+  if (accounts.length === 0) {
+    line();
+    info("Conectar KRANO à Cloudflare");
+    line("Uma página segura da Cloudflare será aberta para você escolher a conta e autorizar:");
+    line("  • publicar e atualizar a KRANO;");
+    line("  • criar o banco D1 e a biblioteca R2;");
+    line("  • configurar os domínios que você escolher.");
+    line();
+    runWrangler(
+      [
+        "login",
+        "--use-keyring",
+        "--scopes",
+        [
+          "account:read",
+          "user:read",
+          "workers:write",
+          "workers_routes:write",
+          "workers_scripts:write",
+          "d1:write",
+          "zone:read",
+          "offline_access"
+        ].join(" ")
+      ],
+      { interactive: true }
+    );
+    whoami = runWrangler(["whoami"], { quiet: true });
+    clean = stripAnsi(`${whoami.stdout}\n${whoami.stderr}`);
+    accounts = parseAccounts(clean);
+  }
+  if (accounts.length === 0) fail("A Cloudflare não devolveu nenhuma conta autorizada.");
+  if (accounts.length === 1) return accounts[0].id;
   line("Contas disponíveis:");
-  unique.forEach((account, index) => line(`  ${index + 1}. ${account}`));
+  accounts.forEach((account, index) => line(`  ${index + 1}. ${account.name}`));
   const chosen = Number(await prompt("Selecione a conta", "1"));
-  return unique[Math.max(0, Math.min(unique.length - 1, chosen - 1))];
+  return accounts[Math.max(0, Math.min(accounts.length - 1, chosen - 1))].id;
+}
+
+function parseAccounts(value) {
+  const rows = [...value.matchAll(/│\s*([^│\r\n]+?)\s*│\s*([a-f0-9]{32})\s*│/gi)].map(
+    (match) => ({ name: match[1].trim(), id: match[2] })
+  );
+  return [...new Map(rows.map((account) => [account.id, account])).values()];
 }
 
 async function ensureInfrastructure({ accountId, workerName, databaseName, bucketName, created }) {
@@ -181,6 +219,11 @@ async function ensureInfrastructure({ accountId, workerName, databaseName, bucke
 
   const config = readConfig();
   config.name = workerName;
+  config.vars = {
+    ...config.vars,
+    WORKER_NAME: workerName,
+    CLOUDFLARE_ACCOUNT_ID: accountId
+  };
   config.d1_databases = [
     {
       binding: "DB",
@@ -287,9 +330,31 @@ async function rollback(created, accountId, databaseName, bucketName, workerName
   }
 }
 
+async function waitForHealth(deploymentUrl) {
+  const healthUrl = new URL("/api/health", deploymentUrl).toString();
+  let lastError = "sem resposta";
+  for (let attempt = 1; attempt <= 12; attempt += 1) {
+    try {
+      const response = await fetch(healthUrl, {
+        headers: { Accept: "application/json" },
+        signal: AbortSignal.timeout(10_000)
+      });
+      const payload = await response.json();
+      if (response.ok && payload?.ok === true && payload?.freeOnly === true) {
+        return;
+      }
+      lastError = `HTTP ${response.status}`;
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : String(error);
+    }
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 1_000));
+  }
+  fail(`O deploy foi enviado, mas a verificação pública falhou: ${lastError}`);
+}
+
 async function setup() {
   line();
-  line(`${colors.violet}Funnel Zero${colors.reset}`);
+  line(`${colors.red}KRANO${colors.reset}`);
   line("Teste ofertas, não ferramentas.");
   line();
 
@@ -305,8 +370,8 @@ async function setup() {
 
   const previous = readManifest();
   const installationName = verifyPrefix(
-    await prompt("Nome da instalação", previous?.installationName ?? "funnel-zero-development"),
-    "funnel-zero-development"
+    await prompt("Nome da instalação", previous?.installationName ?? "krano-development"),
+    "krano-development"
   );
   const workerName = installationName;
   const databaseName = `${installationName}-db`;
@@ -323,6 +388,7 @@ async function setup() {
   }
 
   const created = { database: false, bucket: false, worker: false };
+  const originalConfig = readFileSync(configPath, "utf8");
   try {
     mkdirSync(stateDir, { recursive: true });
     info("Verificando infraestrutura");
@@ -368,6 +434,9 @@ async function setup() {
       setRemoteSecret("SESSION_SECRET", sessionSecret, accountId);
       ok("Segredo de sessão configurado");
     }
+    info("Verificando a URL pública");
+    await waitForHealth(deploymentUrl);
+    ok("URL pública e banco verificados");
 
     const installationComplete = remoteInstallationComplete(databaseName, accountId);
     let setupUrl = null;
@@ -420,6 +489,7 @@ async function setup() {
       line(`${colors.dim}A URL expira em 2 horas e deixa de funcionar após o primeiro uso.${colors.reset}`);
     }
   } catch (error) {
+    writeFileSync(configPath, originalConfig, "utf8");
     await rollback(created, accountId, databaseName, bucketName, workerName);
     throw error;
   }

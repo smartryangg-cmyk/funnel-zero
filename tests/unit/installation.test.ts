@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 describe("configuração open source", () => {
@@ -7,9 +8,11 @@ describe("configuração open source", () => {
 
   it("mantém FREE_ONLY ligado por padrão", () => {
     const config = JSON.parse(readFileSync(resolve(root, "wrangler.jsonc"), "utf8")) as {
-      vars: { FREE_ONLY: string };
+      name: string;
+      vars: { FREE_ONLY: string; WORKER_NAME: string };
     };
     expect(config.vars.FREE_ONLY).toBe("true");
+    expect(config.vars.WORKER_NAME).toBe(config.name);
   });
 
   it("usa Workers Static Assets e prefixo exclusivo", () => {
@@ -17,13 +20,25 @@ describe("configuração open source", () => {
       name: string;
       assets: { directory: string; run_worker_first: string[] };
     };
-    expect(config.name.startsWith("funnel-zero")).toBe(true);
+    expect(config.name.startsWith("krano")).toBe(true);
     expect(config.assets.directory).toBe("./dist");
-    expect(config.assets.run_worker_first).toContain("/api/*");
+    expect(config.assets.run_worker_first).toBe(true);
   });
 
   it("não contém segredos no Wrangler", () => {
     const raw = readFileSync(resolve(root, "wrangler.jsonc"), "utf8");
     expect(raw).not.toMatch(/SESSION_SECRET|password_hash|api[_-]?token/i);
+  });
+
+  it("oferece instalador de etapa única para todos os sistemas", () => {
+    expect(existsSync(resolve(root, "install.mjs"))).toBe(true);
+    expect(existsSync(resolve(root, "INSTALAR-KRANO.cmd"))).toBe(true);
+    expect(existsSync(resolve(root, "install.sh"))).toBe(true);
+    const result = spawnSync(process.execPath, [resolve(root, "install.mjs"), "--help"], {
+      cwd: root,
+      encoding: "utf8"
+    });
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("instalador de etapa única");
   });
 });

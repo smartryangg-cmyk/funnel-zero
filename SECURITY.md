@@ -4,7 +4,7 @@
 
 Não abra vulnerabilidades com detalhes exploráveis em issues públicas. Envie um relato privado ao mantenedor da sua distribuição com:
 
-- versão do Funnel Zero;
+- versão da KRANO;
 - impacto;
 - passos mínimos de reprodução;
 - arquivos ou rotas afetados;
@@ -39,7 +39,7 @@ O MVP considera:
 - rate limit de login em D1;
 - CSP e cabeçalhos defensivos;
 - `Cache-Control: no-store` nas APIs;
-- secrets somente via Wrangler;
+- secrets somente via Wrangler ou pela API oficial de atualização de secrets do próprio Worker;
 - operações de remoção restritas ao manifesto local;
 - logs estruturados sem corpo de requisição.
 
@@ -51,7 +51,12 @@ O MVP considera:
 - páginas públicas recebem CSP com nonce e não são armazenadas em cache durante atribuição A/B;
 - webhooks usam secret mostrado uma vez, hash SHA-256, comparação constante e chave de replay;
 - checkout aceita apenas HTTP/HTTPS e nunca é buscado pelo Worker;
-- domínios usam secret separado, API oficial, permissões mínimas e confirmação pelo hostname;
+- a conexão Cloudflare usa OAuth Authorization Code com PKCE S256, state aleatório, expiração curta e uso único;
+- o verificador PKCE permanece criptografado no D1 apenas enquanto a autorização está em andamento e é removido ao concluir;
+- o callback OAuth é a única etapa pública do fluxo e só prossegue com `state` aleatório, íntegro, não utilizado e não expirado;
+- access token e refresh token da Cloudflare ficam exclusivamente em secrets do Worker, nunca no D1 ou no navegador;
+- a publicação de domínios usa a API oficial e descobre conta e zona automaticamente com permissões mínimas;
+- a desconexão revoga os tokens na Cloudflare, apaga os secrets do Worker e preserva apenas metadados de auditoria;
 - logs não armazenam payloads, tokens, IP completo ou senha.
 
 ## Atualizações

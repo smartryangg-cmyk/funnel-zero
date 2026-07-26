@@ -1,4 +1,9 @@
-import type { PageBlock, PageDocument } from "../../../packages/shared/src/schemas";
+import type {
+  PageBlock,
+  PageDocument,
+  PlayerConfig
+} from "../../../packages/shared/src/schemas";
+import { DEFAULT_PLAYER_CONFIG } from "./assets";
 import { randomId, randomToken } from "./crypto";
 import { escapeHtml, safeColor, safeJson } from "./platform";
 
@@ -23,6 +28,14 @@ interface VariantRow {
   weight: number;
   content_json: string | null;
 }
+
+interface PlayerProfileRow {
+  id: string;
+  player_config_json: string;
+}
+
+const DEMO_VIDEO_URL =
+  "https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4";
 
 function cookieValue(request: Request, name: string): string | null {
   const cookie = request.headers.get("Cookie") ?? "";
@@ -55,13 +68,56 @@ function safeUrl(value: unknown, fallback = "#"): string {
 
 function safeAssetUrl(value: unknown): string {
   const path = safeUrl(value, "");
-  return path.startsWith("/media/") ? path : "";
+  return path.startsWith("/media/") || path === DEMO_VIDEO_URL ? path : "";
 }
 
 function contentRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
     : {};
+}
+
+function clampNumber(value: unknown, minimum: number, maximum: number, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.min(Math.max(parsed, minimum), maximum) : fallback;
+}
+
+function blockStyle(settings: Record<string, unknown>): { className: string; style: string } {
+  const declarations: string[] = [];
+  const align = typeof settings.align === "string" && ["left", "center", "right"].includes(settings.align)
+    ? settings.align
+    : null;
+  if (align) declarations.push(`text-align:${align}`);
+  declarations.push(`max-width:${clampNumber(settings.maxWidth, 240, 1200, 920)}px`);
+  declarations.push(`margin-bottom:${clampNumber(settings.marginBottom, 0, 160, 28)}px`);
+  const padding = clampNumber(settings.padding, 0, 120, 0);
+  const radius = clampNumber(settings.radius, 0, 100, 0);
+  if (padding) declarations.push(`padding:${padding}px`);
+  if (radius) declarations.push(`border-radius:${radius}px`);
+  const fontSize = clampNumber(settings.fontSize, 0, 120, 0);
+  const fontWeight = clampNumber(settings.fontWeight, 0, 900, 0);
+  if (fontSize) declarations.push(`font-size:${fontSize}px`);
+  if (fontWeight) declarations.push(`font-weight:${fontWeight}`);
+  if (typeof settings.textColor === "string" && settings.textColor) {
+    declarations.push(`color:${safeColor(settings.textColor, "inherit")}`);
+  }
+  if (settings.transparentBackground === false) {
+    declarations.push(`background:${safeColor(settings.background, "#000000")}`);
+  }
+  const shadows: Record<string, string> = {
+    soft: "0 12px 35px #00000055",
+    strong: "0 22px 65px #000000aa",
+    glow: "0 0 45px color-mix(in srgb,var(--accent) 45%,transparent)"
+  };
+  if (typeof settings.shadow === "string" && shadows[settings.shadow]) {
+    declarations.push(`box-shadow:${shadows[settings.shadow]}`);
+  }
+  const classes = [
+    "fz-block",
+    settings.hiddenMobile === true ? "fz-hide-mobile" : "",
+    settings.hiddenDesktop === true ? "fz-hide-desktop" : ""
+  ].filter(Boolean).join(" ");
+  return { className: classes, style: declarations.join(";") };
 }
 
 function safeFormatting(value: unknown): string {
@@ -75,10 +131,11 @@ function safeFormatting(value: unknown): string {
   return html;
 }
 
-function renderBlock(
+function renderBlockContent(
   block: PageBlock,
   page: PublicPageRow,
-  pitchAtSeconds: number
+  pitchAtSeconds: number,
+  playerProfiles: Map<string, PlayerConfig>
 ): string {
   const content = contentRecord(block.content);
   switch (block.type) {
@@ -96,20 +153,41 @@ function renderBlock(
       const assetId = typeof content.assetId === "string" ? content.assetId : "";
       const src = safeAssetUrl(content.src ?? (assetId ? `/media/${assetId}` : ""));
       if (!src) {
-        return `<div class="fz-video-placeholder"><strong>VSL ainda não conectada</strong><span>Escolha um vídeo na biblioteca do Funnel Zero.</span></div>`;
+        return `<div class="fz-video-placeholder"><strong>VSL ainda não conectada</strong><span>Escolha um vídeo na biblioteca da KRANO.</span></div>`;
       }
       const poster = safeAssetUrl(content.poster);
-      const pitch = Math.max(0, Number(content.ctaAtSeconds ?? pitchAtSeconds) || 0);
-      return `<section class="fz-player" data-fz-player data-pitch="${pitch}">
-        <video preload="metadata" playsinline ${poster ? `poster="${escapeHtml(poster)}"` : ""}>
+      const profile = playerProfiles.get(assetId) ?? DEFAULT_PLAYER_CONFIG;
+      const pitch = Math.max(
+        0,
+        Number(content.ctaAtSeconds ?? profile.ctaAtSeconds ?? pitchAtSeconds) || 0
+      );
+      const qualitySources = profile.qualitySources
+        .filter((item) => item.assetId !== assetId)
+        .map((item) => ({ label: item.label, src: `/media/${item.assetId}` }));
+      const playerData = escapeHtml(JSON.stringify({
+        ...profile,
+        qualitySources,
+        assetId
+      }));
+      const controlsClass =
+        profile.timelineStyle === "hidden"
+          ? " timeline-hidden"
+          : profile.timelineStyle === "minimal"
+            ? " timeline-minimal"
+            : "";
+      return `<section class="fz-player${controlsClass}" data-fz-player data-pitch="${pitch}" data-profile="${playerData}" data-asset-id="${escapeHtml(assetId)}">
+        <video preload="metadata" playsinline ${profile.autoplayMuted ? "autoplay muted" : ""} ${profile.protectVideo ? `controlslist="nodownload noremoteplayback" disablepictureinpicture` : ""} ${poster ? `poster="${escapeHtml(poster)}"` : ""}>
           <source src="${escapeHtml(src)}" type="video/mp4">
         </video>
         <button class="fz-big-play" type="button" aria-label="Reproduzir vídeo">▶</button>
-        <div class="fz-controls">
+        ${profile.watermark ? `<span class="fz-watermark">${escapeHtml(profile.watermark)}</span>` : ""}
+        <div class="fz-controls"${profile.showControls ? "" : " hidden"}>
           <button type="button" data-action="toggle" aria-label="Reproduzir ou pausar">▶</button>
-          <input type="range" data-action="seek" min="0" max="1000" value="0" aria-label="Progresso">
+          <input type="range" data-action="seek" min="0" max="1000" value="0" aria-label="Progresso"${profile.allowSeek ? "" : " disabled"}>
           <span data-time>0:00 / 0:00</span>
-          <input type="range" data-action="volume" min="0" max="1" step="0.05" value="1" aria-label="Volume">
+          ${profile.showVolume ? `<input type="range" data-action="volume" min="0" max="1" step="0.05" value="${profile.autoplayMuted ? "0" : "1"}" aria-label="Volume">` : ""}
+          ${profile.showSpeed ? `<select data-action="speed" aria-label="Velocidade"><option value="1">1x</option><option value="1.25">1,25x</option><option value="1.5">1,5x</option><option value="2">2x</option></select>` : ""}
+          ${profile.showQuality && qualitySources.length ? `<select data-action="quality" aria-label="Qualidade"><option value="${escapeHtml(src)}">Original</option>${qualitySources.map((item) => `<option value="${escapeHtml(item.src)}">${escapeHtml(item.label)}</option>`).join("")}</select>` : ""}
         </div>
       </section>`;
     }
@@ -125,23 +203,32 @@ function renderBlock(
     case "divider":
       return `<hr class="fz-divider">`;
     case "leadForm":
+      {
+        const fields = content.fields && typeof content.fields === "object"
+          ? content.fields as Record<string, unknown>
+          : { name: true, email: true, whatsapp: false };
       return `<form class="fz-lead-form" data-lead-form>
-        <label>Nome<input name="name" autocomplete="name" maxlength="120"></label>
-        <label>E-mail<input name="email" type="email" autocomplete="email" required maxlength="254"></label>
+        ${fields.name !== false ? `<label>Nome<input name="name" autocomplete="name" maxlength="120"></label>` : ""}
+        ${fields.email !== false ? `<label>E-mail<input name="email" type="email" autocomplete="email" maxlength="254"></label>` : ""}
+        ${fields.whatsapp === true ? `<label>WhatsApp<input name="whatsapp" type="tel" autocomplete="tel" maxlength="30"></label>` : ""}
         <label class="fz-consent"><input name="consent" type="checkbox" required> Aceito receber o conteúdo solicitado.</label>
         <button class="fz-cta" type="submit">${escapeHtml(content.label ?? "Quero receber")}</button>
         <output aria-live="polite"></output>
       </form>`;
+      }
     case "quiz": {
       const questions = Array.isArray(content.questions) ? content.questions.slice(0, 10) : [];
       if (!questions.length) return `<div class="fz-quiz"><strong>Quiz demonstrativo</strong><p>Adicione perguntas no editor.</p></div>`;
-      return `<div class="fz-quiz" data-quiz>${questions
+      const transitionMs = Math.min(Math.max(Number(content.transitionMs) || 250, 0), 5_000);
+      return `<div class="fz-quiz" data-quiz data-transition="${transitionMs}">
+        <div class="fz-quiz-progress"><span></span></div>${questions
         .map((question, index) => {
           const item = contentRecord(question);
           const options = Array.isArray(item.options) ? item.options.slice(0, 8) : [];
           return `<section ${index ? "hidden" : ""} data-question="${index}">
+            <small>Pergunta ${index + 1} de ${questions.length}</small>
             <strong>${escapeHtml(item.title ?? `Pergunta ${index + 1}`)}</strong>
-            ${options.map((option) => `<button type="button">${escapeHtml(option)}</button>`).join("")}
+            ${options.map((option) => `<button type="button" data-answer="${escapeHtml(option)}">${escapeHtml(option)}</button>`).join("")}
           </section>`;
         })
         .join("")}<output></output></div>`;
@@ -151,6 +238,18 @@ function renderBlock(
     default:
       return "";
   }
+}
+
+function renderBlock(
+  block: PageBlock,
+  page: PublicPageRow,
+  pitchAtSeconds: number,
+  playerProfiles: Map<string, PlayerConfig>
+): string {
+  const content = renderBlockContent(block, page, pitchAtSeconds, playerProfiles);
+  if (!content) return "";
+  const presentation = blockStyle(block.settings ?? {});
+  return `<div class="${presentation.className}" style="${escapeHtml(presentation.style)}">${content}</div>`;
 }
 
 function analyticsBootstrap(pixels: Record<string, unknown>, nonce: string): string {
@@ -167,12 +266,12 @@ function analyticsBootstrap(pixels: Record<string, unknown>, nonce: string): str
     blocks.push(`<script nonce="${nonce}">!function(f,b,e,v,n,t,s){if(f.fbq)return;n=f.fbq=function(){n.callMethod?
 n.callMethod.apply(n,arguments):n.queue.push(arguments)};if(!f._fbq)f._fbq=n;n.push=n;n.loaded=!0;n.version='2.0';
 n.queue=[];t=b.createElement(e);t.async=!0;t.src=v;s=b.getElementsByTagName(e)[0];s.parentNode.insertBefore(t,s)}
-(window,document,'script','https://connect.facebook.net/en_US/fbevents.js');fbq('init','${metaPixelId}');fbq('track','PageView');</script>`);
+(window,document,'script','https://connect.facebook.net/en_US/fbevents.js');fbq('init','${metaPixelId}');</script>`);
   }
   if (ga4Id) {
     blocks.push(`<script nonce="${nonce}" async src="https://www.googletagmanager.com/gtag/js?id=${ga4Id}"></script>
 <script nonce="${nonce}">window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments)}
-gtag('js',new Date());gtag('config','${ga4Id}',{send_page_view:true});</script>`);
+gtag('js',new Date());gtag('config','${ga4Id}',{send_page_view:false});</script>`);
   }
   return blocks.join("\n");
 }
@@ -187,16 +286,39 @@ function trackingScript(meta: Record<string, unknown>, nonce: string): string {
   const sent = new Set();
   const utm = Object.fromEntries([...new URLSearchParams(location.search)]
     .filter(([key]) => key.startsWith('utm_')).slice(0, 10));
+  const pixelNames = {
+    page_view:'PageView', vsl_start:'ViewContent', quiz_complete:'CompleteRegistration',
+    lead_submit:'Lead', checkout_click:'InitiateCheckout', purchase:'Purchase'
+  };
+  const ga4Names = {
+    page_view:'page_view', vsl_start:'video_start', vsl_progress:'video_progress',
+    vsl_complete:'video_complete', quiz_complete:'quiz_complete',
+    lead_submit:'generate_lead', checkout_click:'begin_checkout', purchase:'purchase'
+  };
   const emit = (type, properties = {}, once = '') => {
     const key = once || type + ':' + JSON.stringify(properties);
     if (once && sent.has(key)) return;
     if (once) sent.add(key);
+    const id = crypto.randomUUID();
     queue.push({
-      id: crypto.randomUUID(), type, occurredAt: new Date().toISOString(),
+      id, type, occurredAt: new Date().toISOString(),
       anonymousId: aid, offerId: meta.offerId, funnelId: meta.funnelId,
       pageId: meta.pageId, variantId: meta.variantId, source: utm.utm_source || null,
       campaign: utm.utm_campaign || null, utm, properties
     });
+    if (window.fbq && pixelNames[type]) {
+      window.fbq('track', pixelNames[type], properties, {eventID:id});
+    }
+    if (window.gtag && ga4Names[type]) {
+      window.gtag('event', ga4Names[type], {
+        ...properties,
+        event_id:id,
+        page_location:location.href,
+        campaign_source:utm.utm_source,
+        campaign_medium:utm.utm_medium,
+        campaign_name:utm.utm_campaign
+      });
+    }
     if (queue.length >= 10) flush();
   };
   const flush = () => {
@@ -217,47 +339,102 @@ function trackingScript(meta: Record<string, unknown>, nonce: string): string {
     const toggle = root.querySelector('[data-action="toggle"]');
     const seek = root.querySelector('[data-action="seek"]');
     const volume = root.querySelector('[data-action="volume"]');
+    const speed = root.querySelector('[data-action="speed"]');
+    const quality = root.querySelector('[data-action="quality"]');
     const time = root.querySelector('[data-time]');
     const pitch = Number(root.dataset.pitch || 0);
+    const assetId = root.dataset.assetId || '';
+    let profile = {};
+    try { profile = JSON.parse(root.dataset.profile || '{}'); } catch {}
+    const eventData = (properties = {}) => ({assetId, ...properties});
+    const resumeKey = 'fz:resume:' + assetId;
     let lastProgressBucket = 0;
+    let lastSavedSecond = -1;
     const format = (seconds) => Number.isFinite(seconds) ? Math.floor(seconds / 60) + ':' +
       String(Math.floor(seconds % 60)).padStart(2, '0') : '0:00';
     const playToggle = () => video.paused ? video.play() : video.pause();
     big.addEventListener('click', playToggle);
-    toggle.addEventListener('click', playToggle);
-    volume.addEventListener('input', () => { video.volume = Number(volume.value); });
-    seek.addEventListener('input', () => {
+    if (toggle) toggle.addEventListener('click', playToggle);
+    if (profile.clickToPause !== false) video.addEventListener('click', playToggle);
+    if (volume) volume.addEventListener('input', () => {
+      video.volume = Number(volume.value);
+      video.muted = video.volume === 0;
+    });
+    if (seek && profile.allowSeek !== false) seek.addEventListener('input', () => {
       if (video.duration) video.currentTime = Number(seek.value) / 1000 * video.duration;
     });
+    if (speed) speed.addEventListener('change', () => { video.playbackRate = Number(speed.value); });
+    if (quality) quality.addEventListener('change', () => {
+      const currentTime = video.currentTime;
+      const shouldResume = !video.paused;
+      video.src = quality.value;
+      video.load();
+      video.addEventListener('loadedmetadata', () => {
+        video.currentTime = Math.min(currentTime, video.duration || currentTime);
+        if (shouldResume) video.play().catch(() => {});
+      }, {once:true});
+    });
+    if (profile.protectVideo !== false) {
+      root.addEventListener('contextmenu', (event) => event.preventDefault());
+      video.addEventListener('dragstart', (event) => event.preventDefault());
+    }
+    video.addEventListener('loadedmetadata', () => {
+      if (profile.resumePlayback !== false && assetId) {
+        const saved = Number(localStorage.getItem(resumeKey) || 0);
+        if (saved > 3 && saved < video.duration - 3) video.currentTime = saved;
+      }
+      if (profile.autoplayMuted === true) {
+        video.muted = true;
+        video.play().catch(() => {});
+      }
+    }, {once:true});
     video.addEventListener('play', () => {
-      big.hidden = true; toggle.textContent = 'Ⅱ'; emit('vsl_start', {}, 'vsl_start');
+      big.hidden = true;
+      if (toggle) toggle.textContent = 'Ⅱ';
+      emit('vsl_start', eventData(), 'vsl_start:' + assetId);
     });
     video.addEventListener('pause', () => {
-      toggle.textContent = '▶'; if (!video.ended) emit('vsl_pause', {second:Math.round(video.currentTime)});
+      if (toggle) toggle.textContent = '▶';
+      if (!video.ended) emit('vsl_pause', eventData({second:Math.round(video.currentTime)}));
     });
     video.addEventListener('timeupdate', () => {
       const ratio = video.duration ? video.currentTime / video.duration : 0;
-      seek.value = String(Math.round(ratio * 1000));
-      time.textContent = format(video.currentTime) + ' / ' + format(video.duration);
-      if (ratio >= .25) emit('vsl_25', {}, 'vsl_25');
-      if (ratio >= .50) emit('vsl_50', {}, 'vsl_50');
-      if (ratio >= .75) emit('vsl_75', {}, 'vsl_75');
+      if (seek) seek.value = String(Math.round(ratio * 1000));
+      if (time) time.textContent = format(video.currentTime) + ' / ' + format(video.duration);
+      if (ratio >= .25) emit('vsl_25', eventData(), 'vsl_25:' + assetId);
+      if (ratio >= .50) emit('vsl_50', eventData(), 'vsl_50:' + assetId);
+      if (ratio >= .75) emit('vsl_75', eventData(), 'vsl_75:' + assetId);
       const bucket = Math.floor(ratio * 10) * 10;
       if (bucket > lastProgressBucket && bucket < 100) {
         lastProgressBucket = bucket;
-        emit('vsl_progress', {percent:bucket, second:Math.round(video.currentTime)}, 'vsl_progress:' + bucket);
+        emit('vsl_progress', eventData({
+          percent:bucket,
+          second:Math.round(video.currentTime)
+        }), 'vsl_progress:' + assetId + ':' + bucket);
+      }
+      const currentSecond = Math.floor(video.currentTime);
+      if (profile.resumePlayback !== false && assetId && currentSecond - lastSavedSecond >= 3) {
+        lastSavedSecond = currentSecond;
+        localStorage.setItem(resumeKey, String(currentSecond));
       }
       if (pitch > 0 && video.currentTime >= pitch) {
-        emit('vsl_pitch', {second:pitch}, 'vsl_pitch');
+        emit('vsl_pitch', eventData({second:pitch}), 'vsl_pitch:' + assetId);
         document.querySelectorAll('.fz-delayed-cta').forEach((item) => item.classList.add('visible'));
       }
     });
-    video.addEventListener('ended', () => emit('vsl_complete', {}, 'vsl_complete'));
+    video.addEventListener('ended', () => {
+      if (assetId) localStorage.removeItem(resumeKey);
+      emit('vsl_complete', eventData(), 'vsl_complete:' + assetId);
+    });
   });
 
   document.querySelectorAll('[data-checkout="true"]').forEach((link) => {
     link.addEventListener('click', () => {
-      emit('checkout_click', {href:link.href}, 'checkout_click:' + link.href);
+      const player = document.querySelector('[data-fz-player]');
+      emit('checkout_click', {
+        href:link.href,
+        assetId:player?.dataset.assetId || ''
+      }, 'checkout_click:' + link.href);
       flush();
       try {
         const target = new URL(link.href);
@@ -276,6 +453,7 @@ function trackingScript(meta: Record<string, unknown>, nonce: string): string {
       const response = await fetch('/api/public/leads', {
         method:'POST', headers:{'Content-Type':'application/json'},
         body:JSON.stringify({name:data.get('name'), email:data.get('email'),
+          whatsapp:data.get('whatsapp'),
           consent:data.get('consent') === 'on', anonymousId:aid, offerId:meta.offerId,
           funnelId:meta.funnelId, pageId:meta.pageId})
       });
@@ -286,16 +464,61 @@ function trackingScript(meta: Record<string, unknown>, nonce: string): string {
 
   document.querySelectorAll('[data-quiz]').forEach((quiz) => {
     const questions = [...quiz.querySelectorAll('[data-question]')];
+    const progress = quiz.querySelector('.fz-quiz-progress span');
+    const transition = Number(quiz.dataset.transition || 250);
+    emit('quiz_start', {questionCount:questions.length}, 'quiz_start');
+    const updateProgress = (index) => {
+      if (progress) progress.style.width = String(Math.round(index / questions.length * 100)) + '%';
+    };
+    updateProgress(0);
     questions.forEach((section, index) => section.querySelectorAll('button').forEach((button) => {
       button.addEventListener('click', () => {
+        const question = section.querySelector('strong')?.textContent || 'Pergunta ' + (index + 1);
+        const answer = button.dataset.answer || button.textContent || '';
+        emit('quiz_answer', {question, answer, questionIndex:index});
+        button.classList.add('selected');
+        updateProgress(index + 1);
+        setTimeout(() => {
         section.hidden = true;
         if (questions[index + 1]) questions[index + 1].hidden = false;
-        else quiz.querySelector('output').textContent = 'Respostas registradas. Continue para a próxima etapa.';
+        else {
+          quiz.querySelector('output').textContent = 'Respostas registradas. Continue para a próxima etapa.';
+          emit('quiz_complete', {questionCount:questions.length}, 'quiz_complete');
+        }
+        }, transition);
       });
     }));
   });
 })();
 </script>`;
+}
+
+async function readPlayerProfiles(
+  env: Env,
+  content: PageDocument
+): Promise<Map<string, PlayerConfig>> {
+  const assetIds = content.blocks
+    .filter((block) => block.type === "video")
+    .map((block) => contentRecord(block.content).assetId)
+    .filter(
+      (assetId): assetId is string =>
+        typeof assetId === "string" && /^[a-zA-Z0-9-]{8,100}$/.test(assetId)
+    );
+  const uniqueIds = [...new Set(assetIds)];
+  if (!uniqueIds.length) return new Map();
+  const placeholders = uniqueIds.map(() => "?").join(",");
+  const rows = await env.DB.prepare(
+    `SELECT id, player_config_json
+     FROM assets
+     WHERE id IN (${placeholders}) AND media_type = 'video'
+       AND upload_status = 'ready' AND deleted_at IS NULL`
+  ).bind(...uniqueIds).all<PlayerProfileRow>();
+  return new Map(
+    rows.results.map((row) => [
+      row.id,
+      safeJson<PlayerConfig>(row.player_config_json, DEFAULT_PLAYER_CONFIG)
+    ])
+  );
 }
 
 async function readPublicPage(
@@ -328,7 +551,7 @@ async function chooseVariant(
 ): Promise<{ id: string | null; content: PageDocument; cookie: string | null }> {
   const base = safeJson<PageDocument>(page.content_json, {
     version: 1,
-    theme: { background: "#070b16", text: "#f5f7fb", accent: "#8b5cf6" },
+    theme: { background: "#000000", text: "#f7f7f8", accent: "#f00000" },
     blocks: []
   });
   if (!page.funnel_id) return { id: null, content: base, cookie: null };
@@ -390,16 +613,31 @@ export async function servePublicPage(
   const variant = await chooseVariant(env, page, anonymousId, request);
   const content = variant.content;
   const theme = content.theme ?? {};
-  const background = safeColor(theme.background, "#070b16");
-  const text = safeColor(theme.text, "#f5f7fb");
-  const accent = safeColor(theme.accent, "#8b5cf6");
+  const background = safeColor(theme.background, "#000000");
+  const text = safeColor(theme.text, "#f7f7f8");
+  const accent = safeColor(theme.accent, "#f00000");
+  const pageWidth = clampNumber(theme.maxWidth, 320, 1440, 920);
+  const pageAlign = typeof theme.contentAlign === "string" && ["left", "center", "right"].includes(theme.contentAlign)
+    ? theme.contentAlign
+    : "center";
+  const buttonRadius = clampNumber(theme.buttonRadius, 0, 999, 14);
+  const fontFamily = theme.font === "editorial"
+    ? "Georgia,'Times New Roman',serif"
+    : theme.font === "rounded"
+      ? "'Trebuchet MS',ui-rounded,sans-serif"
+      : theme.font === "system"
+        ? "system-ui,sans-serif"
+        : "Inter,ui-sans-serif,system-ui,sans-serif";
   const pitchAtSeconds = Math.max(0, Number(content.settings?.pitchAtSeconds ?? 0) || 0);
   const nonce = randomToken(18);
   const pixels = safeJson<Record<string, unknown>>(page.pixel_config_json, {});
   const title = content.settings?.title ?? page.page_name;
   const description =
-    content.settings?.description ?? `${page.offer_name} — página publicada no Funnel Zero.`;
-  const blocks = content.blocks.map((block) => renderBlock(block, page, pitchAtSeconds)).join("\n");
+    content.settings?.description ?? `${page.offer_name} — página publicada na KRANO.`;
+  const playerProfiles = await readPlayerProfiles(env, content);
+  const blocks = content.blocks
+    .map((block) => renderBlock(block, page, pitchAtSeconds, playerProfiles))
+    .join("\n");
   const meta = {
     anonymousId,
     offerId: page.offer_id,
@@ -415,24 +653,26 @@ export async function servePublicPage(
   <meta name="description" content="${escapeHtml(description)}">
   <title>${escapeHtml(title)}</title>
   <style nonce="${nonce}">
-    :root{--bg:${background};--text:${text};--accent:${accent};color-scheme:dark}
-    *{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 50% -10%,color-mix(in srgb,var(--accent) 22%,transparent),transparent 42%),var(--bg);color:var(--text);font-family:Inter,ui-sans-serif,system-ui,sans-serif;line-height:1.6}
-    .fz-page{width:min(920px,calc(100% - 32px));margin:auto;padding:72px 0 96px}.fz-page>*{margin:0 auto 28px}
-    .fz-heading{font-size:clamp(2rem,6vw,4.5rem);line-height:1.02;text-align:center;letter-spacing:-.045em;max-width:880px}
-    .fz-copy{font-size:clamp(1rem,2.2vw,1.25rem);max-width:720px;text-align:center;color:color-mix(in srgb,var(--text) 78%,transparent)}
+    :root{--bg:${background};--text:${text};--accent:${accent};--page-width:${pageWidth}px;--page-align:${pageAlign};--button-radius:${buttonRadius}px;color-scheme:dark}
+    *{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 50% -10%,color-mix(in srgb,var(--accent) 22%,transparent),transparent 42%),var(--bg);color:var(--text);font-family:${fontFamily};line-height:1.6}
+    .fz-page{width:min(var(--page-width),calc(100% - 32px));margin:auto;padding:72px 0 96px;text-align:var(--page-align)}.fz-block{width:100%;margin-inline:auto}.fz-block>*{margin-inline:auto}
+    .fz-heading{font-size:clamp(2rem,6vw,4.5rem);line-height:1.02;text-align:inherit;letter-spacing:-.045em;max-width:880px}
+    .fz-copy{font-size:clamp(1rem,2.2vw,1.25rem);max-width:720px;text-align:inherit;color:color-mix(in srgb,currentColor 78%,transparent)}
     .fz-copy p{margin:0 0 1em}.fz-image img{display:block;max-width:100%;border-radius:20px;margin:auto}
     .fz-player,.fz-video-placeholder{position:relative;max-width:860px;aspect-ratio:16/9;border-radius:22px;overflow:hidden;background:#02040a;border:1px solid color-mix(in srgb,var(--text) 16%,transparent);box-shadow:0 30px 80px #0008}
     .fz-player video{width:100%;height:100%;display:block}.fz-big-play{position:absolute;inset:50% auto auto 50%;translate:-50% -50%;width:78px;height:78px;border:0;border-radius:50%;background:var(--accent);color:white;font-size:28px;cursor:pointer}
+    .fz-watermark{position:absolute;right:14px;top:14px;padding:5px 9px;border-radius:8px;background:#0009;color:#fff;font-size:11px;pointer-events:none}
     .fz-controls{position:absolute;inset:auto 0 0;display:flex;gap:12px;align-items:center;padding:14px;background:linear-gradient(transparent,#000d)}
-    .fz-controls button{border:0;background:transparent;color:white;font-size:20px}.fz-controls input[data-action=seek]{flex:1}.fz-controls input[data-action=volume]{width:80px}.fz-controls span{font-size:12px;white-space:nowrap}
+    .fz-controls button{border:0;background:transparent;color:white;font-size:20px}.fz-controls input[data-action=seek]{flex:1;accent-color:var(--accent)}.fz-controls input[data-action=seek]:disabled{opacity:.55}.fz-controls input[data-action=volume]{width:80px;accent-color:var(--accent)}.fz-controls span{font-size:12px;white-space:nowrap}.fz-controls select{border:1px solid #ffffff26;border-radius:8px;background:#080808;color:#fff;padding:6px}
+    .timeline-minimal .fz-controls input[data-action=seek]{height:3px}.timeline-minimal .fz-controls span{display:none}.timeline-hidden .fz-controls input[data-action=seek],.timeline-hidden .fz-controls span{display:none}
     .fz-video-placeholder{display:grid;place-content:center;text-align:center;color:#94a3b8}.fz-video-placeholder strong{color:white;font-size:24px}.fz-video-placeholder span{display:block}
-    .fz-cta-wrap{text-align:center}.fz-cta{display:inline-flex;justify-content:center;align-items:center;border:0;border-radius:14px;padding:17px 28px;background:var(--accent);color:white;text-decoration:none;font-weight:800;font-size:18px;cursor:pointer;box-shadow:0 16px 44px color-mix(in srgb,var(--accent) 35%,transparent)}
+    .fz-cta-wrap{text-align:inherit}.fz-cta{display:inline-flex;justify-content:center;align-items:center;border:0;border-radius:var(--button-radius);padding:17px 28px;background:var(--accent);color:white;text-decoration:none;font-weight:800;font-size:18px;cursor:pointer;box-shadow:0 16px 44px color-mix(in srgb,var(--accent) 35%,transparent)}
     .fz-delayed-cta{display:none}.fz-delayed-cta.visible{display:block}.fz-spacer{height:44px}.fz-divider{border:0;border-top:1px solid color-mix(in srgb,var(--text) 18%,transparent);max-width:720px}
     .fz-lead-form,.fz-quiz{max-width:580px;padding:28px;border:1px solid color-mix(in srgb,var(--text) 16%,transparent);border-radius:20px;background:color-mix(in srgb,var(--text) 5%,transparent)}
     .fz-lead-form label{display:grid;gap:7px;margin:0 0 14px}.fz-lead-form input{padding:13px;border-radius:10px;border:1px solid #ffffff2b;background:#0004;color:var(--text)}.fz-consent{display:flex!important;grid-template-columns:auto 1fr!important}.fz-lead-form output{display:block;margin-top:12px}
-    .fz-quiz section{display:grid;gap:10px}.fz-quiz button{padding:13px;border:1px solid #ffffff25;border-radius:12px;background:#ffffff0a;color:var(--text);cursor:pointer}.fz-quiz output{display:block}
-    [hidden]{display:none!important}.fz-custom-html{max-width:720px;margin-inline:auto}
-    @media(max-width:640px){.fz-page{padding-top:48px}.fz-controls input[data-action=volume],.fz-controls span{display:none}.fz-player{border-radius:14px}}
+    .fz-quiz-progress{height:6px;border-radius:999px;background:#ffffff14;overflow:hidden;margin-bottom:22px}.fz-quiz-progress span{display:block;width:0;height:100%;background:var(--accent);transition:width .25s ease}.fz-quiz section{display:grid;gap:10px}.fz-quiz section small{color:color-mix(in srgb,var(--text) 62%,transparent)}.fz-quiz section strong{font-size:20px}.fz-quiz button{padding:13px;border:1px solid #ffffff25;border-radius:12px;background:#ffffff0a;color:var(--text);cursor:pointer;text-align:left}.fz-quiz button:hover,.fz-quiz button.selected{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 18%,transparent)}.fz-quiz output{display:block}
+    [hidden]{display:none!important}.fz-custom-html{max-width:720px;margin-inline:auto}.fz-hide-desktop{display:none}
+    @media(max-width:640px){.fz-page{padding-top:48px}.fz-controls span{display:none}.fz-controls input[data-action=volume]{width:58px}.fz-player{border-radius:14px}.fz-hide-desktop{display:block}.fz-hide-mobile{display:none}}
   </style>
   ${analyticsBootstrap(pixels, nonce)}
 </head>
@@ -448,7 +688,7 @@ export async function servePublicPage(
     "Referrer-Policy": "strict-origin-when-cross-origin",
     "X-Frame-Options": "SAMEORIGIN",
     "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=()",
-    "Content-Security-Policy": `default-src 'self'; script-src 'self' 'nonce-${nonce}' https://connect.facebook.net https://www.googletagmanager.com; style-src 'self' 'nonce-${nonce}'; img-src 'self' data: https://www.facebook.com; media-src 'self'; connect-src 'self' https://www.facebook.com https://www.google-analytics.com; font-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'self'; form-action 'self' https:`
+    "Content-Security-Policy": `default-src 'self'; script-src 'self' 'nonce-${nonce}' https://connect.facebook.net https://www.googletagmanager.com; style-src 'self' 'nonce-${nonce}'; img-src 'self' data: https://www.facebook.com; media-src 'self' https://interactive-examples.mdn.mozilla.net; connect-src 'self' https://www.facebook.com https://www.google-analytics.com; font-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'self'; form-action 'self' https:`
   });
   if (!existingAid) {
     headers.append("Set-Cookie", `fz_aid=${anonymousId}; Path=/; Secure; SameSite=Lax; Max-Age=31536000`);

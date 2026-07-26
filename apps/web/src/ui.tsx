@@ -9,22 +9,86 @@ export function navigate(to: string, replace = false) {
 
 export function Brand() {
   return (
-    <div className="brand" aria-label="Funnel Zero">
-      <span className="brand-mark"><i /><i /></span>
-      <span>Funnel <strong>Zero</strong></span>
+    <div className="brand" aria-label="KRANO">
+      <span className="brand-mark" aria-hidden="true"><i /><i /></span>
+      <span>KRANO</span>
     </div>
   );
 }
 
-const items = [
-  { href: "/dashboard", icon: "⌂", label: "Visão geral" },
-  { href: "/offers", icon: "◫", label: "Ofertas" },
-  { href: "/funnels", icon: "⇢", label: "Funis" },
-  { href: "/pages", icon: "▦", label: "Páginas" },
-  { href: "/media-library", icon: "▶", label: "Mídia e VSL" },
-  { href: "/domains", icon: "◇", label: "Domínios" },
-  { href: "/settings", icon: "⚙", label: "Configurações" }
+interface NavigationItem {
+  href: string;
+  icon: string;
+  label: string;
+  badge?: string;
+  match?: string[];
+  mobile?: boolean;
+}
+
+interface NavigationGroup {
+  label: string;
+  items: NavigationItem[];
+}
+
+const navigation: NavigationGroup[] = [
+  {
+    label: "Principal",
+    items: [{ href: "/home", icon: "⌂", label: "Início", mobile: true }]
+  },
+  {
+    label: "Integrações",
+    items: [
+      {
+        href: "/integrations/cloudflare",
+        icon: "☁",
+        label: "Cloudflare",
+        match: ["/integrations", "/domains", "/hosting", "/media-library"],
+        mobile: true
+      },
+      { href: "/domains", icon: "◇", label: "Domínios" },
+      { href: "/hosting", icon: "▦", label: "Hospedagem" },
+      { href: "/media-library", icon: "▣", label: "Gerenciador" }
+    ]
+  },
+  {
+    label: "KRATUBE",
+    items: [
+      {
+        href: "/kratube",
+        icon: "▶",
+        label: "Vídeos e player",
+        match: ["/kratube", "/player"],
+        mobile: true
+      }
+    ]
+  },
+  {
+    label: "Ofertas",
+    items: [
+      {
+        href: "/studio",
+        icon: "⇢",
+        label: "Ofertas e funis",
+        match: ["/studio", "/offers", "/funnels", "/tracking"],
+        mobile: true
+      },
+      { href: "/pages", icon: "▤", label: "Criador de sites", badge: "depois" }
+    ]
+  },
+  {
+    label: "Biblioteca",
+    items: [{ href: "/studies", icon: "▱", label: "Estudos", badge: "depois" }]
+  },
+  {
+    label: "Análise",
+    items: [{ href: "/dashboard", icon: "⌁", label: "Dashboards", badge: "básico", mobile: true }]
+  }
 ];
+
+function itemIsActive(item: NavigationItem, path: string): boolean {
+  const candidates = item.match ?? [item.href];
+  return candidates.some((candidate) => path === candidate || path.startsWith(`${candidate}/`));
+}
 
 export function AppShell({
   user,
@@ -44,30 +108,43 @@ export function AppShell({
       <aside className="sidebar">
         <Brand />
         <nav className="side-nav" aria-label="Navegação principal">
-          {items.map((item) => (
-            <button
-              key={item.href}
-              className={`nav-item ${path === item.href || path.startsWith(`${item.href}/`) ? "active" : ""}`}
-              onClick={() => navigate(item.href)}
-            >
-              <span>{item.icon}</span><span>{item.label}</span>
-            </button>
+          {navigation.map((group) => (
+            <section className="nav-group" key={group.label}>
+              <small>{group.label}</small>
+              {group.items.map((item) => (
+                <button
+                  key={item.href}
+                  className={`nav-item ${item.mobile ? "nav-mobile" : ""} ${itemIsActive(item, path) ? "active" : ""}`}
+                  onClick={() => navigate(item.href)}
+                >
+                  <span aria-hidden="true">{item.icon}</span>
+                  <span>{item.label}</span>
+                  {item.badge && <i>{item.badge}</i>}
+                </button>
+              ))}
+            </section>
           ))}
         </nav>
         <div className="sidebar-bottom">
           <div className="free-badge">
             <span className="status-dot" />
-            <div><strong>FREE_ONLY ativo</strong><small>Proteções locais habilitadas</small></div>
+            <div><strong>Plano gratuito protegido</strong><small>Limites monitorados pela KRANO</small></div>
           </div>
-          <button className="user-card" onClick={() => void onLogout()} title="Sair">
+          <button className={`user-card ${path === "/account" ? "active" : ""}`} onClick={() => navigate("/account")}>
             <span className="avatar">{initials(user.name)}</span>
-            <span><strong>{user.name}</strong><small>{user.email}</small></span>
-            <span>↪</span>
+            <span><strong>{user.name}</strong><small>Conta e conexões</small></span>
+            <span>›</span>
           </button>
+          <button className="logout-link" onClick={() => void onLogout()}>Sair com segurança</button>
         </div>
       </aside>
       <main className="dashboard">
-        <div className="mobile-top"><Brand /><button onClick={() => void onLogout()}>Sair</button></div>
+        <div className="mobile-top">
+          <Brand />
+          <button className="mobile-account" onClick={() => navigate("/account")}>
+            <span className="avatar">{initials(user.name)}</span>
+          </button>
+        </div>
         <div className="environment mobile-env">{environment}</div>
         {children}
       </main>
@@ -89,7 +166,7 @@ export function PageHeader({
   return (
     <header className="dashboard-header">
       <div>
-        <div className="breadcrumb">Funnel Zero / {eyebrow}</div>
+        <div className="breadcrumb">KRANO / {eyebrow}</div>
         <h1>{title}</h1>
         <p>{subtitle}</p>
       </div>

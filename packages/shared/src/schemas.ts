@@ -19,8 +19,21 @@ export const loginSchema = z.object({
   password: z.string().min(1).max(128)
 });
 
+export const changePasswordSchema = z.object({
+  currentPassword: z.string().min(1).max(128),
+  newPassword: z
+    .string()
+    .min(12)
+    .max(128)
+    .regex(/[a-z]/, "Inclua uma letra minúscula.")
+    .regex(/[A-Z]/, "Inclua uma letra maiúscula.")
+    .regex(/[0-9]/, "Inclua um número.")
+    .regex(/[^A-Za-z0-9]/, "Inclua um símbolo.")
+});
+
 export type SetupInput = z.infer<typeof setupSchema>;
 export type LoginInput = z.infer<typeof loginSchema>;
+export type ChangePasswordInput = z.infer<typeof changePasswordSchema>;
 
 export interface SessionUser {
   id: string;
@@ -40,6 +53,11 @@ export interface DashboardMetrics {
   checkoutClicks: number;
   clickThroughRate: number;
   conversions: number;
+  leads: number;
+  quizStarts: number;
+  quizCompletions: number;
+  conversionRate: number;
+  revenue: number;
   winningVariants: number;
   storageBytes: number;
   storageLimitBytes: number;
@@ -48,6 +66,38 @@ export interface DashboardMetrics {
   pendingDomains: number;
   periodDays: number;
   freeOnly: boolean;
+  funnelStages: FunnelMetricStage[];
+  retentionCurve: RetentionPoint[];
+  dailySeries: DailyMetricPoint[];
+  topQuizAnswers: QuizAnswerMetric[];
+}
+
+export interface FunnelMetricStage {
+  key: string;
+  label: string;
+  value: number;
+  rateFromPrevious: number;
+  dropOff: number;
+  dropRate: number;
+}
+
+export interface RetentionPoint {
+  percent: number;
+  viewers: number;
+  rate: number;
+}
+
+export interface DailyMetricPoint {
+  date: string;
+  pageViews: number;
+  checkoutClicks: number;
+  conversions: number;
+}
+
+export interface QuizAnswerMetric {
+  question: string;
+  answer: string;
+  count: number;
 }
 
 export interface BootstrapResponse {
@@ -131,6 +181,9 @@ export interface PageDocument {
     text: string;
     accent: string;
     font?: string;
+    maxWidth?: number;
+    contentAlign?: "left" | "center" | "right";
+    buttonRadius?: number;
   };
   blocks: PageBlock[];
   settings?: {
@@ -155,6 +208,23 @@ export interface PageSummary {
   publishedAt: string | null;
   updatedAt: string;
   publicUrl: string | null;
+  isLive: boolean;
+  publicationIssue: string | null;
+}
+
+export function isPublicRouteReady(input: {
+  pageStatus: string;
+  publishedVersionId: string | null;
+  offerId: string | null;
+  offerStatus: string | null;
+  funnelId: string | null;
+  funnelStatus: string | null;
+}): boolean {
+  return input.pageStatus === "published"
+    && Boolean(input.publishedVersionId)
+    && Boolean(input.offerId)
+    && input.offerStatus === "active"
+    && (!input.funnelId || input.funnelStatus === "published");
 }
 
 export interface TemplateSummary {
@@ -184,6 +254,39 @@ export interface AssetSummary {
   uploadStatus: "pending" | "uploading" | "ready" | "failed" | "deleting";
   createdAt: string;
   url: string | null;
+  playerConfig: PlayerConfig;
+}
+
+export interface PlayerConfig {
+  showControls: boolean;
+  showVolume: boolean;
+  timelineStyle: "real" | "minimal" | "hidden";
+  allowSeek: boolean;
+  resumePlayback: boolean;
+  showSpeed: boolean;
+  showQuality: boolean;
+  autoplayMuted: boolean;
+  clickToPause: boolean;
+  protectVideo: boolean;
+  watermark: string;
+  ctaAtSeconds: number;
+  qualitySources: Array<{
+    label: "360p" | "720p" | "1080p";
+    assetId: string;
+  }>;
+}
+
+export interface VideoMetrics {
+  assetId: string;
+  starts: number;
+  uniqueViewers: number;
+  pauses: number;
+  completions: number;
+  checkoutClicks: number;
+  averageRetention: number;
+  completionRate: number;
+  retention: RetentionPoint[];
+  periodDays: number;
 }
 
 export interface ExperimentSummary {
@@ -229,6 +332,8 @@ export interface DomainSummary {
   funnelId: string | null;
   funnelName: string | null;
   hostname: string;
+  zoneName?: string;
+  certIssued?: boolean;
   status: "pending" | "validating" | "active" | "failed";
   isPrimary: boolean;
   lastCheckedAt: string | null;
@@ -236,7 +341,18 @@ export interface DomainSummary {
 
 export interface DomainProviderStatus {
   configured: boolean;
-  accountId: string;
+  connected: boolean;
+  ready: boolean;
+  authMode: "none" | "oauth" | "legacy_token";
+  accountName: string;
   workerName: string;
+  scopes: string[];
+  zoneImportReady: boolean;
+  expiresAt: string | null;
+  connectedAt: string | null;
+  lastCheckedAt: string | null;
+  oauthAvailable: boolean;
+  guidedTokenAvailable: boolean;
+  tokenTemplateUrl: string | null;
   tokenAvailable: boolean;
 }

@@ -2,6 +2,12 @@ import type { SessionUser } from "../../../packages/shared/src/schemas";
 import { randomId, randomToken, sha256 } from "./crypto";
 import { errorResponse, json, readJson, requireSameOrigin } from "./http";
 import {
+  deleteMetaToken,
+  hasMetaToken,
+  saveMetaToken,
+  testMetaConnection
+} from "./meta";
+import {
   audit,
   optionalString,
   parseBodyRecord,
@@ -57,7 +63,7 @@ interface VariantRow {
 }
 
 async function readIntegrations(env: Env, origin: string) {
-  const [offers, checkouts, webhooks, experiments, variants, customScripts] = await Promise.all([
+  const [offers, checkouts, webhooks, experiments, variants, customScripts, metaSecrets] = await Promise.all([
     env.DB.prepare(
       "SELECT id, name, slug, checkout_url, pixel_config_json FROM offers ORDER BY name"
     ).all<OfferIntegrationRow>(),
@@ -81,15 +87,22 @@ async function readIntegrations(env: Env, origin: string) {
     ).all<VariantRow>(),
     env.DB.prepare(
       "SELECT value_json FROM installation_settings WHERE key = 'custom_scripts'"
-    ).first<{ value_json: string }>()
+    ).first<{ value_json: string }>(),
+    env.DB.prepare(
+      "SELECT offer_id FROM integration_secrets WHERE kind = 'meta_capi'"
+    ).all<{ offer_id: string }>()
   ]);
+  const offersWithMetaToken = new Set(metaSecrets.results.map((row) => row.offer_id));
   return {
     offers: offers.results.map((row) => ({
       id: row.id,
       name: row.name,
       slug: row.slug,
       checkoutUrl: row.checkout_url,
-      pixelConfig: safeJson<Record<string, unknown>>(row.pixel_config_json, {})
+      pixelConfig: {
+        ...safeJson<Record<string, unknown>>(row.pixel_config_json, {}),
+        hasCapiToken: offersWithMetaToken.has(row.id)
+      }
     })),
     checkouts: checkouts.results.map((row) => ({
       id: row.id,
@@ -137,16 +150,47 @@ async function savePixels(
   user: SessionUser,
   offerId: string
 ): Promise<Response> {
-  const body = parseBodyRecord(await readJson(request, 32_000));
-  const metaPixelId = optionalString(body.metaPixelId, 20);
-  const ga4Id = optionalString(body.ga4Id, 20)?.toUpperCase() ?? null;
+  const body = parseBodyRecord(await readJson(request, 64_000));
+  const pastedCode = optionalString(body.metaCode, 32_000) ?? "";
+  const pastedGa4Code = optionalString(body.ga4Code, 32_000) ?? "";
+  const codeMatch = pastedCode.match(
+    /fbq\s*\(\s*['"]init['"]\s*,\s*['"](\d{6,20})['"]/i
+  );
+  const ga4CodeMatch = pastedGa4Code.match(
+    /(?:gtag\s*\(\s*['"]config['"]\s*,\s*['"]|[?&]id=)(G-[A-Z0-9]{6,15})/i
+  );
+  const metaPixelId = codeMatch?.[1] ?? optionalString(body.metaPixelId, 20);
+  const ga4Id = (ga4CodeMatch?.[1] ?? optionalString(body.ga4Id, 20))?.toUpperCase() ?? null;
   if (metaPixelId && !/^\d{6,20}$/.test(metaPixelId)) {
     throw new ValidationError("O ID do Meta Pixel deve conter apenas números.");
   }
   if (ga4Id && !/^G-[A-Z0-9]{6,15}$/.test(ga4Id)) {
     throw new ValidationError("Informe um ID GA4 no formato G-XXXXXXXX.");
   }
-  const config = JSON.stringify({ metaPixelId: metaPixelId ?? "", ga4Id: ga4Id ?? "" });
+  const offer = await env.DB.prepare("SELECT id FROM offers WHERE id = ? LIMIT 1")
+    .bind(offerId)
+    .first<{ id: string }>();
+  if (!offer) return errorResponse(404, "NOT_FOUND", "Oferta não encontrada.");
+  const capiToken = optionalString(body.capiToken, 4096);
+  if (body.clearCapiToken === true) {
+    await deleteMetaToken(env, offerId);
+  } else if (capiToken) {
+    if (capiToken.length < 40) {
+      throw new ValidationError("O token da API de Conversões parece incompleto.");
+    }
+    await saveMetaToken(env, offerId, capiToken);
+  }
+  const tokenAvailable = await hasMetaToken(env, offerId);
+  const capiEnabled = body.capiEnabled === true && Boolean(metaPixelId) && tokenAvailable;
+  const config = JSON.stringify({
+    metaPixelId: metaPixelId ?? "",
+    ga4Id: ga4Id ?? "",
+    capiEnabled,
+    testEventCode: optionalString(body.testEventCode, 80) ?? "",
+    graphVersion: env.META_GRAPH_VERSION || "v25.0",
+    metaSource: pastedCode ? "pasted_code" : "manual",
+    ga4Source: pastedGa4Code ? "pasted_code" : "manual"
+  });
   const result = await env.DB.prepare(
     "UPDATE offers SET pixel_config_json = ?, updated_at = datetime('now') WHERE id = ?"
   ).bind(config, offerId).run();
@@ -155,10 +199,42 @@ async function savePixels(
     env.DB.prepare(
       `INSERT INTO integration_diagnostics(id, offer_id, integration_type, status, details_json)
        VALUES (?, ?, 'pixels', 'ok', ?)`
-    ).bind(randomId(), offerId, JSON.stringify({ metaConfigured: Boolean(metaPixelId), ga4Configured: Boolean(ga4Id) })),
+    ).bind(
+      randomId(),
+      offerId,
+      JSON.stringify({
+        metaConfigured: Boolean(metaPixelId),
+        ga4Configured: Boolean(ga4Id),
+        capiEnabled,
+        tokenAvailable
+      })
+    ),
     audit(env, user.id, "pixels.updated", "offer", offerId)
   ]);
-  return json({ ok: true, diagnostics: { metaConfigured: Boolean(metaPixelId), ga4Configured: Boolean(ga4Id) } });
+  return json({
+    ok: true,
+    diagnostics: {
+      metaConfigured: Boolean(metaPixelId),
+      ga4Configured: Boolean(ga4Id),
+      capiEnabled,
+      tokenAvailable,
+      detectedFromCode: Boolean(codeMatch),
+      detectedGa4FromCode: Boolean(ga4CodeMatch)
+    }
+  });
+}
+
+async function testPixels(env: Env, offerId: string, origin: string): Promise<Response> {
+  try {
+    const result = await testMetaConnection(env, offerId, origin);
+    return json({ ok: true, ...result });
+  } catch (error) {
+    return errorResponse(
+      400,
+      "META_TEST_FAILED",
+      error instanceof Error ? error.message : "A Meta recusou o evento de teste."
+    );
+  }
 }
 
 async function createCheckout(
@@ -322,6 +398,10 @@ export async function handleOperationsApi(
     const pixels = url.pathname.match(/^\/api\/integrations\/pixels\/([^/]+)$/);
     if (pixels && request.method === "PATCH") {
       return savePixels(request, env, user, pixels[1]);
+    }
+    const pixelTest = url.pathname.match(/^\/api\/integrations\/pixels\/([^/]+)\/test$/);
+    if (pixelTest && request.method === "POST") {
+      return testPixels(env, pixelTest[1], url.origin);
     }
     if (url.pathname === "/api/integrations/checkouts" && request.method === "POST") {
       return createCheckout(request, env, user);

@@ -1,13 +1,30 @@
-import { useEffect, useState, type FormEvent, type ReactNode } from "react";
+import {
+  Suspense,
+  lazy,
+  useEffect,
+  useState,
+  type FormEvent,
+  type ReactNode
+} from "react";
 import type { BootstrapResponse } from "../../../packages/shared/src/schemas";
-import { Domains, Settings } from "./AdminSettings";
 import { api, ApiError } from "./api";
 import { Dashboard } from "./Dashboard";
-import { Funnels } from "./Funnels";
-import { MediaLibrary } from "./Media";
-import { Offers } from "./Offers";
-import { Pages } from "./Pages";
+import { Home } from "./Home";
 import { AppShell, Brand, navigate } from "./ui";
+
+const Account = lazy(() => import("./Account").then((module) => ({ default: module.Account })));
+const CloudflareCenter = lazy(() => import("./Integrations").then((module) => ({ default: module.CloudflareCenter })));
+const Domains = lazy(() => import("./AdminSettings").then((module) => ({ default: module.Domains })));
+const Settings = lazy(() => import("./AdminSettings").then((module) => ({ default: module.Settings })));
+const Funnels = lazy(() => import("./Funnels").then((module) => ({ default: module.Funnels })));
+const Hosting = lazy(() => import("./Hosting").then((module) => ({ default: module.Hosting })));
+const MediaLibrary = lazy(() => import("./Media").then((module) => ({ default: module.MediaLibrary })));
+const OfferStudio = lazy(() => import("./OfferStudio").then((module) => ({ default: module.OfferStudio })));
+const Offers = lazy(() => import("./Offers").then((module) => ({ default: module.Offers })));
+const Pages = lazy(() => import("./Pages").then((module) => ({ default: module.Pages })));
+const PixelCenter = lazy(() => import("./PixelCenter").then((module) => ({ default: module.PixelCenter })));
+const PlayerStudio = lazy(() => import("./PlayerStudio").then((module) => ({ default: module.PlayerStudio })));
+const Studies = lazy(() => import("./Studies").then((module) => ({ default: module.Studies })));
 
 type BootstrapState =
   | { status: "loading" }
@@ -33,25 +50,34 @@ export default function App() {
   }, []);
 
   if (bootstrap.status === "loading") return <Loading />;
-  if (bootstrap.status === "error") return <Centered><Brand /><div className="notice error"><strong>Não foi possível abrir o Funnel Zero</strong><p>{bootstrap.message}</p><button className="button secondary" onClick={() => void refresh()}>Tentar novamente</button></div></Centered>;
-  if (path === "/") return <Redirect to={!bootstrap.data.installed ? "/setup" : bootstrap.data.user ? "/dashboard" : "/login"} />;
+  if (bootstrap.status === "error") return <Centered><Brand /><div className="notice error"><strong>Não foi possível abrir a KRANO</strong><p>{bootstrap.message}</p><button className="button secondary" onClick={() => void refresh()}>Tentar novamente</button></div></Centered>;
+  if (path === "/") return <Redirect to={!bootstrap.data.installed ? "/setup" : bootstrap.data.user ? "/home" : "/login"} />;
   if (path === "/setup") return bootstrap.data.installed ? <Redirect to="/login" /> : <Setup onComplete={refresh} />;
-  if (path === "/login") return bootstrap.data.user ? <Redirect to="/dashboard" /> : <Login onComplete={refresh} />;
+  if (path === "/login") return bootstrap.data.user ? <Redirect to="/home" /> : <Login onComplete={refresh} />;
   if (!bootstrap.data.user) return <Redirect to="/login" />;
 
   const funnelMatch = path.match(/^\/funnels\/([^/]+)$/);
   const editorMatch = path.match(/^\/pages\/([^/]+)\/edit$/);
   let content: ReactNode;
-  if (path === "/dashboard") content = <Dashboard user={bootstrap.data.user} />;
+  if (path === "/home") content = <Home user={bootstrap.data.user} />;
+  else if (path === "/integrations" || path === "/integrations/cloudflare") content = <CloudflareCenter />;
+  else if (path === "/account") content = <Account user={bootstrap.data.user} onPasswordChanged={refresh} />;
+  else if (path === "/dashboard") content = <Dashboard user={bootstrap.data.user} />;
+  else if (path === "/hosting") content = <Hosting />;
+  else if (path === "/kratube") content = <PlayerStudio />;
+  else if (path === "/player") content = <Redirect to="/kratube" />;
+  else if (path === "/studio") content = <OfferStudio />;
   else if (path === "/offers") content = <Offers />;
   else if (path === "/funnels") content = <Funnels />;
   else if (funnelMatch) content = <Funnels selectedId={funnelMatch[1]} />;
   else if (path === "/pages") content = <Pages />;
   else if (editorMatch) content = <Pages editorId={editorMatch[1]} />;
   else if (path === "/media-library") content = <MediaLibrary />;
+  else if (path === "/tracking") content = <PixelCenter />;
   else if (path === "/domains") content = <Domains />;
+  else if (path === "/studies") content = <Studies />;
   else if (path === "/settings") content = <Settings />;
-  else return <Redirect to="/dashboard" />;
+  else return <Redirect to="/home" />;
 
   async function logout() {
     await api.logout();
@@ -60,7 +86,7 @@ export default function App() {
   }
   return (
     <AppShell user={bootstrap.data.user} environment={bootstrap.data.environment} path={path} onLogout={logout}>
-      {content}
+      <Suspense fallback={<FeatureLoading />}>{content}</Suspense>
     </AppShell>
   );
 }
@@ -77,7 +103,7 @@ function Setup({ onComplete }: { onComplete: () => Promise<void> }) {
     try {
       await api.setup({ token, name: form.name, email: form.email, password: form.password });
       await onComplete();
-      navigate("/dashboard", true);
+      navigate("/home", true);
     } catch (caught) {
       setError(caught instanceof ApiError ? caught.message : "Falha ao configurar.");
     } finally { setSaving(false); }
@@ -110,7 +136,7 @@ function Login({ onComplete }: { onComplete: () => Promise<void> }) {
     try {
       await api.login({ email, password });
       await onComplete();
-      navigate("/dashboard", true);
+      navigate("/home", true);
     } catch (caught) {
       setError(caught instanceof ApiError ? caught.message : "Falha ao entrar.");
     } finally { setSaving(false); }
@@ -121,7 +147,7 @@ function Login({ onComplete }: { onComplete: () => Promise<void> }) {
         <Field label="E-mail"><input type="email" autoComplete="email" required value={email} onChange={(event) => setEmail(event.target.value)} /></Field>
         <Field label="Senha"><input type="password" autoComplete="current-password" required value={password} onChange={(event) => setPassword(event.target.value)} /></Field>
         {error && <p className="form-error">{error}</p>}
-        <button className="button primary full" disabled={saving}>{saving ? "Entrando…" : "Entrar no Funnel Zero"}</button>
+        <button className="button primary full" disabled={saving}>{saving ? "Entrando…" : "Entrar na KRANO"}</button>
       </form>
       <Security />
     </AuthLayout>
@@ -145,6 +171,9 @@ function Security() {
 }
 function Loading() {
   return <Centered><Brand /><div className="loader" /><p className="muted">Conectando à sua instalação…</p></Centered>;
+}
+function FeatureLoading() {
+  return <div className="feature-loading"><div className="loader" /><span>Carregando ferramenta…</span></div>;
 }
 function Centered({ children }: { children: ReactNode }) {
   return <main className="centered">{children}</main>;

@@ -1,8 +1,10 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
-  "name": "funnel-zero-development",
+  "name": "krano-development",
+  "workers_dev": true,
+  "preview_urls": true,
   "main": "apps/worker/src/index.ts",
-  "compatibility_date": "2026-07-25",
+  "compatibility_date": "2026-07-26",
   "compatibility_flags": [
     "nodejs_compat"
   ],
@@ -10,25 +12,12 @@
     "directory": "./dist",
     "binding": "ASSETS",
     "not_found_handling": "single-page-application",
-    "run_worker_first": [
-      "/api/*",
-      "/login*",
-      "/setup*",
-      "/dashboard*",
-      "/offers*",
-      "/funnels*",
-      "/pages*",
-      "/media-library*",
-      "/domains*",
-      "/settings*",
-      "/o/*",
-      "/media/*"
-    ]
+    "run_worker_first": true
   },
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "funnel-zero-development-db",
+      "database_name": "krano-development-db",
       "database_id": "00000000-0000-0000-0000-000000000000",
       "migrations_dir": "./migrations"
     }
@@ -36,15 +25,18 @@
   "r2_buckets": [
     {
       "binding": "MEDIA",
-      "bucket_name": "funnel-zero-development-media"
+      "bucket_name": "krano-development-media"
     }
   ],
   "vars": {
-    "APP_NAME": "Funnel Zero",
+    "APP_NAME": "KRANO",
+    "WORKER_NAME": "krano-development",
+    "CLOUDFLARE_ACCOUNT_ID": "",
     "ENVIRONMENT": "development",
     "FREE_ONLY": "true",
     "MAX_STORAGE_BYTES": "10737418240",
     "MAX_FILE_BYTES": "524288000",
+    "META_GRAPH_VERSION": "v25.0",
     "SESSION_DAYS": "7"
   },
   "triggers": {

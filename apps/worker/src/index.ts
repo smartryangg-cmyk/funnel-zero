@@ -1,4 +1,10 @@
-import { loginSchema, setupSchema, type BootstrapResponse } from "../../../packages/shared/src/schemas";
+import {
+  changePasswordSchema,
+  loginSchema,
+  setupSchema,
+  type BootstrapResponse,
+  type SessionUser
+} from "../../../packages/shared/src/schemas";
 import {
   clearSessionCookie,
   createSession,
@@ -13,7 +19,8 @@ import { hashPassword, randomId, sha256, verifyPassword } from "./crypto";
 import { readDashboard } from "./dashboard";
 import { handleAssetsApi, serveMedia } from "./assets";
 import { handleCatalogApi } from "./catalog";
-import { handleDomainsApi } from "./domains";
+import { handleCloudflareApi, handleCloudflareOAuthCallback } from "./cloudflare";
+import { handleDomainsApi, resolveCustomDomainUrl } from "./domains";
 import {
   errorResponse,
   json,
@@ -103,7 +110,7 @@ async function handleSetupComplete(request: Request, env: Env): Promise<Response
   ]);
   const session = await createSession(request, env, userId);
   return json(
-    { ok: true, redirect: "/dashboard" },
+    { ok: true, redirect: "/home" },
     { status: 201, headers: { "Set-Cookie": session.cookie } }
   );
 }
@@ -143,6 +150,56 @@ async function handleLogin(request: Request, env: Env): Promise<Response> {
   return json(
     { user: { id: user.id, name: user.name, email: user.email, role: user.role } },
     { headers: { "Set-Cookie": session.cookie } }
+  );
+}
+
+async function handleChangePassword(
+  request: Request,
+  env: Env,
+  user: SessionUser
+): Promise<Response> {
+  if (!requireSameOrigin(request)) {
+    return errorResponse(403, "ORIGIN_INVALID", "Origem inválida.");
+  }
+  const parsed = changePasswordSchema.safeParse(await readJson(request));
+  if (!parsed.success) {
+    return errorResponse(400, "VALIDATION_ERROR", "A nova senha não atende aos requisitos.", parsed.error.flatten());
+  }
+  if (parsed.data.currentPassword === parsed.data.newPassword) {
+    return errorResponse(400, "PASSWORD_UNCHANGED", "Escolha uma senha diferente da atual.");
+  }
+
+  const passwordUser = await findUserByEmail(env, user.email);
+  const currentPasswordValid = passwordUser
+    ? await verifyPassword(
+        parsed.data.currentPassword,
+        passwordUser.password_salt,
+        passwordUser.password_iterations,
+        passwordUser.password_hash
+      )
+    : false;
+  if (!passwordUser || !currentPasswordValid) {
+    return errorResponse(401, "CURRENT_PASSWORD_INVALID", "A senha atual está incorreta.");
+  }
+
+  const password = await hashPassword(parsed.data.newPassword);
+  await env.DB.batch([
+    env.DB.prepare(
+      `UPDATE users
+       SET password_hash = ?, password_salt = ?, password_iterations = ?, updated_at = datetime('now')
+       WHERE id = ?`
+    ).bind(password.hash, password.salt, password.iterations, user.id),
+    env.DB.prepare(
+      "UPDATE sessions SET revoked_at = datetime('now') WHERE user_id = ? AND revoked_at IS NULL"
+    ).bind(user.id),
+    env.DB.prepare(
+      "INSERT INTO audit_logs(id, user_id, action, entity_type, entity_id) VALUES (?, ?, 'auth.password_changed', 'user', ?)"
+    ).bind(randomId(), user.id, user.id)
+  ]);
+
+  return json(
+    { ok: true, requiresLogin: true },
+    { headers: { "Set-Cookie": clearSessionCookie() } }
   );
 }
 
@@ -194,11 +251,16 @@ async function handleApi(
   if (webhookResponse) return webhookResponse;
   const publicTracking = await handlePublicTrackingApi(request, env, ctx, url);
   if (publicTracking) return publicTracking;
+  const cloudflareOAuthCallback = await handleCloudflareOAuthCallback(request, env, url);
+  if (cloudflareOAuthCallback) return cloudflareOAuthCallback;
 
   const user = await getCurrentUser(request, env, ctx);
   if (!user) return errorResponse(401, "UNAUTHORIZED", "Faça login para continuar.");
 
   if (request.method === "GET" && url.pathname === "/api/auth/me") return json({ user });
+  if (request.method === "POST" && url.pathname === "/api/account/password") {
+    return handleChangePassword(request, env, user);
+  }
 
   if (request.method === "GET" && url.pathname === "/api/dashboard") {
     const period = Number(url.searchParams.get("days") ?? "7");
@@ -211,6 +273,8 @@ async function handleApi(
   if (assetsResponse) return assetsResponse;
   const operationsResponse = await handleOperationsApi(request, env, user, url);
   if (operationsResponse) return operationsResponse;
+  const cloudflareResponse = await handleCloudflareApi(request, env, user, url);
+  if (cloudflareResponse) return cloudflareResponse;
   const domainsResponse = await handleDomainsApi(request, env, user, url);
   if (domainsResponse) return domainsResponse;
 
@@ -223,7 +287,12 @@ async function handlePage(
   ctx: ExecutionContext,
   url: URL
 ): Promise<Response> {
-  if (url.pathname.startsWith("/dashboard")) {
+  if (
+    url.pathname.startsWith("/home")
+    || url.pathname.startsWith("/dashboard")
+    || url.pathname.startsWith("/integrations")
+    || url.pathname.startsWith("/account")
+  ) {
     const user = await getCurrentUser(request, env, ctx);
     if (!user) return Response.redirect(`${url.origin}/login`, 302);
   }
@@ -262,6 +331,9 @@ async function scheduled(env: Env): Promise<void> {
     env.DB.prepare("DELETE FROM sessions WHERE expires_at < datetime('now') OR revoked_at IS NOT NULL"),
     env.DB.prepare("DELETE FROM login_attempts WHERE created_at < datetime('now', '-1 day')"),
     env.DB.prepare("DELETE FROM setup_tokens WHERE expires_at < datetime('now') OR used_at IS NOT NULL"),
+    env.DB.prepare(
+      "DELETE FROM cloudflare_oauth_states WHERE expires_at < datetime('now') OR used_at IS NOT NULL"
+    ),
     env.DB.prepare("DELETE FROM tracking_events WHERE occurred_at < datetime('now', ?)").bind(
       `-${trackingDays} days`
     ),
@@ -285,6 +357,16 @@ export default {
       if (url.pathname.startsWith("/media/")) return await serveMedia(request, env, url);
       if (url.pathname === "/o" || url.pathname.startsWith("/o/")) {
         return await servePublicPage(request, env, url);
+      }
+      const customDomain = await resolveCustomDomainUrl(env, url);
+      if (customDomain.publicUrl) {
+        return await servePublicPage(request, env, customDomain.publicUrl);
+      }
+      if (customDomain.matched) {
+        return new Response(
+          "<!doctype html><html lang=\"pt-BR\"><meta charset=\"utf-8\"><title>Página não encontrada</title><body><main><h1>Página não encontrada</h1><p>Revise a publicação deste domínio na KRANO.</p></main></body></html>",
+          { status: 404, headers: { "Content-Type": "text/html; charset=utf-8" } }
+        );
       }
       return await handlePage(request, env, ctx, url);
     } catch (error) {

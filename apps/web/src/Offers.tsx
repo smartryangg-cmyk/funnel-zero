@@ -8,6 +8,7 @@ export function Offers() {
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState<OfferSummary | null>(null);
+  const [deletingId, setDeletingId] = useState("");
   const [error, setError] = useState("");
 
   async function load() {
@@ -30,6 +31,25 @@ export function Offers() {
       await load();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Falha ao atualizar.");
+    }
+  }
+
+  async function removeOffer(offer: OfferSummary) {
+    const warning = [
+      `Excluir a oferta "${offer.name}"?`,
+      `${offer.funnelCount} funil(is) e ${offer.pageCount} página(s) serão preservados como rascunho, mas perderão o vínculo com a oferta.`,
+      "Pixels, checkout e segredos desta oferta serão removidos."
+    ].join("\n\n");
+    if (!confirm(warning)) return;
+    setDeletingId(offer.id);
+    setError("");
+    try {
+      await api.deleteOffer(offer.id);
+      await load();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Falha ao excluir oferta.");
+    } finally {
+      setDeletingId("");
     }
   }
 
@@ -65,6 +85,13 @@ export function Offers() {
                 ) : (
                   <button className="button ghost" onClick={() => void changeStatus(offer, "archived")}>Arquivar</button>
                 )}
+                <button
+                  className="button danger"
+                  disabled={deletingId === offer.id}
+                  onClick={() => void removeOffer(offer)}
+                >
+                  {deletingId === offer.id ? "Excluindo…" : "Excluir"}
+                </button>
               </div>
             </article>
           ))}

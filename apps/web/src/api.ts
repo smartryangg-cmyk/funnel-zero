@@ -9,8 +9,10 @@ import type {
   OfferSummary,
   PageSummary,
   PageVersionSummary,
+  PlayerConfig,
   SessionUser,
-  TemplateSummary
+  TemplateSummary,
+  VideoMetrics
 } from "../../../packages/shared/src/schemas";
 
 interface ApiErrorBody {
@@ -80,6 +82,11 @@ export const api = {
       body: JSON.stringify(input)
     }),
   logout: () => request<{ ok: true }>("/api/auth/logout", { method: "POST", body: "{}" }),
+  changePassword: (input: { currentPassword: string; newPassword: string }) =>
+    request<{ ok: true; requiresLogin: true }>("/api/account/password", {
+      method: "POST",
+      body: JSON.stringify(input)
+    }),
   dashboard: (days: number) =>
     request<{ metrics: DashboardMetrics }>(`/api/dashboard?days=${days}`),
   offers: () => request<{ offers: OfferSummary[] }>("/api/offers"),
@@ -93,6 +100,11 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify(input)
     }),
+  deleteOffer: (id: string) =>
+    request<{ ok: true; detachedFunnels: number; detachedPages: number }>(
+      `/api/offers/${id}`,
+      { method: "DELETE", body: "{}" }
+    ),
   funnels: (offerId?: string) =>
     request<{ funnels: FunnelSummary[] }>(
       `/api/funnels${offerId ? `?offerId=${encodeURIComponent(offerId)}` : ""}`
@@ -113,6 +125,11 @@ export const api = {
   duplicateFunnel: (id: string) =>
     request<{ funnel: FunnelSummary }>(`/api/funnels/${id}/duplicate`, {
       method: "POST",
+      body: "{}"
+    }),
+  deleteFunnel: (id: string) =>
+    request<{ ok: true; preservedPages: number }>(`/api/funnels/${id}`, {
+      method: "DELETE",
       body: "{}"
     }),
   pages: (offerId?: string) =>
@@ -137,10 +154,16 @@ export const api = {
       body: JSON.stringify(input)
     }),
   publishPage: (id: string) =>
-    request<{ page: PageSummary; versionNumber: number }>(`/api/pages/${id}/publish`, {
-      method: "POST",
-      body: "{}"
-    }),
+    request<{
+      page: PageSummary;
+      versionNumber: number;
+      live: true;
+      publicUrl: string;
+      activatedOffer: boolean;
+      publishedFunnel: boolean;
+    }>(`/api/pages/${id}/publish`, { method: "POST", body: "{}" }),
+  deletePage: (id: string) =>
+    request<{ ok: true }>(`/api/pages/${id}`, { method: "DELETE", body: "{}" }),
   pageVersions: (id: string) =>
     request<{ versions: PageVersionSummary[] }>(`/api/pages/${id}/versions`),
   restorePageVersion: (pageId: string, versionId: string) =>
@@ -176,14 +199,50 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify({ name })
     }),
-  deleteAsset: (id: string) =>
-    request<{ ok: true }>(`/api/assets/${id}`, { method: "DELETE", body: "{}" }),
-  integrations: () => request<IntegrationSettings>("/api/integrations"),
-  savePixels: (offerId: string, input: { metaPixelId: string; ga4Id: string }) =>
-    request<{ ok: true }>(`/api/integrations/pixels/${offerId}`, {
+  updateAsset: (id: string, input: { name?: string; playerConfig?: PlayerConfig }) =>
+    request<{ asset: AssetSummary }>(`/api/assets/${id}`, {
       method: "PATCH",
       body: JSON.stringify(input)
     }),
+  videoMetrics: (id: string, days = 7) =>
+    request<{ metrics: VideoMetrics }>(
+      `/api/assets/${id}/metrics?days=${encodeURIComponent(days)}`
+    ),
+  deleteAsset: (id: string) =>
+    request<{ ok: true }>(`/api/assets/${id}`, { method: "DELETE", body: "{}" }),
+  integrations: () => request<IntegrationSettings>("/api/integrations"),
+  savePixels: (
+    offerId: string,
+    input: {
+      metaPixelId: string;
+      metaCode?: string;
+      ga4Id: string;
+      ga4Code?: string;
+      capiEnabled?: boolean;
+      capiToken?: string;
+      clearCapiToken?: boolean;
+      testEventCode?: string;
+    }
+  ) =>
+    request<{
+      ok: true;
+      diagnostics: {
+        metaConfigured: boolean;
+        ga4Configured: boolean;
+        capiEnabled: boolean;
+        tokenAvailable: boolean;
+        detectedFromCode: boolean;
+        detectedGa4FromCode: boolean;
+      };
+    }>(`/api/integrations/pixels/${offerId}`, {
+      method: "PATCH",
+      body: JSON.stringify(input)
+    }),
+  testMeta: (offerId: string) =>
+    request<{ ok: true; received: number; message: string }>(
+      `/api/integrations/pixels/${offerId}/test`,
+      { method: "POST", body: "{}" }
+    ),
   createCheckout: (input: { offerId: string; name: string; checkoutUrl: string }) =>
     request<{ id: string }>("/api/integrations/checkouts", {
       method: "POST",
@@ -212,24 +271,49 @@ export const api = {
     }),
   domains: () =>
     request<{ provider: DomainProviderStatus; domains: DomainSummary[] }>("/api/domains"),
-  saveDomainProvider: (input: { accountId: string; workerName: string }) =>
-    request<{ provider: DomainProviderStatus }>("/api/domains/provider", {
-      method: "PATCH",
-      body: JSON.stringify(input)
+  startCloudflareOAuth: () =>
+    request<{ authorizeUrl: string }>("/api/cloudflare/oauth/start", {
+      method: "POST",
+      body: "{}"
+    }),
+  connectCloudflareToken: (apiToken: string) =>
+    request<{
+      ok: true;
+      provider: { connected: true; accountName: string; workerName: string };
+    }>("/api/cloudflare/token/connect", {
+      method: "POST",
+      body: JSON.stringify({ apiToken })
+    }),
+  disconnectCloudflare: () =>
+    request<{ ok: true; warning: string | null }>("/api/cloudflare/disconnect", {
+      method: "POST",
+      body: "{}"
     }),
   syncDomains: () =>
-    request<{ ok: true; remoteCount: number }>("/api/domains/sync", {
+    request<{ ok: true; remoteCount: number; activeCount: number; validatingCount: number }>("/api/domains/sync", {
       method: "POST",
       body: "{}"
     }),
   domainZones: () =>
-    request<{ zones: Array<{ id: string; name: string; status: string }> }>("/api/domains/zones"),
+    request<{
+      zones: Array<{ id: string; name: string; status: string; nameServers: string[] }>;
+    }>("/api/domains/zones"),
+  importDomain: (domain: string) =>
+    request<{
+      zone: {
+        id: string;
+        name: string;
+        status: string;
+        nameServers: string[];
+      };
+      registrarStepRequired: boolean;
+    }>("/api/domains/import", {
+      method: "POST",
+      body: JSON.stringify({ domain })
+    }),
   attachDomain: (input: {
     hostname: string;
-    confirmation: string;
-    zoneId: string;
-    zoneName: string;
-    funnelId?: string | null;
+    funnelId: string;
     isPrimary?: boolean;
   }) =>
     request<{ id: string; hostname: string; status: string }>("/api/domains", {

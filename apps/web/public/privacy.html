@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="pt-BR">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Privacidade — KRANO</title>
+<style>body{margin:0;background:#080c18;color:#e8edf8;font:16px/1.7 system-ui,sans-serif}main{width:min(760px,calc(100% - 40px));margin:64px auto}h1{font-size:42px;line-height:1.1}h2{margin-top:36px;color:#ff9b4a}a{color:#ff9b4a}p,li{color:#b8c1d6}</style>
+<main>
+  <h1>Privacidade da KRANO</h1>
+  <p>Esta instalação é autohospedada na conta Cloudflare do operador. Os dados do painel, das ofertas e dos funis permanecem nos recursos D1 e R2 dessa conta.</p>
+  <h2>Conexão Cloudflare</h2>
+  <p>A KRANO usa OAuth oficial com PKCE. Tokens de acesso e renovação ficam exclusivamente como secrets do Worker e não são enviados ao navegador nem armazenados no D1. O banco mantém somente metadados necessários para mostrar o estado da conexão.</p>
+  <h2>Domínios e revogação</h2>
+  <p>As permissões autorizadas são usadas para listar zonas e associar domínios ao Worker. O administrador pode desconectar a conta no painel; a ação revoga os tokens e remove os secrets relacionados.</p>
+  <h2>Conteúdo e métricas</h2>
+  <p>O operador da instalação controla o conteúdo publicado e as integrações de análise habilitadas. A KRANO não vende dados pessoais.</p>
+  <p><a href="/">Voltar à KRANO</a></p>
+</main>
+</html>
