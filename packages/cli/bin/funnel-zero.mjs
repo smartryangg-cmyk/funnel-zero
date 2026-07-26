@@ -170,24 +170,7 @@ async function chooseAccount() {
     line("  • criar o banco D1 e a biblioteca R2;");
     line("  • configurar os domínios que você escolher.");
     line();
-    runWrangler(
-      [
-        "login",
-        "--use-keyring",
-        "--scopes",
-        [
-          "account:read",
-          "user:read",
-          "workers:write",
-          "workers_routes:write",
-          "workers_scripts:write",
-          "d1:write",
-          "zone:read",
-          "offline_access"
-        ].join(" ")
-      ],
-      { interactive: true }
-    );
+    runWrangler(["login"], { interactive: true });
     whoami = runWrangler(["whoami"], { quiet: true });
     clean = stripAnsi(`${whoami.stdout}\n${whoami.stderr}`);
     accounts = parseAccounts(clean);
