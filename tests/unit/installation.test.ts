@@ -41,4 +41,12 @@ describe("configuração open source", () => {
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("instalador de etapa única");
   });
+
+  it("gera os tipos Cloudflare antes de validar ou construir um clone limpo", () => {
+    const packageJson = JSON.parse(readFileSync(resolve(root, "package.json"), "utf8")) as {
+      scripts: Record<string, string>;
+    };
+    expect(packageJson.scripts.pretypecheck).toBe("wrangler types");
+    expect(packageJson.scripts.prebuild).toBe("wrangler types");
+  });
 });
