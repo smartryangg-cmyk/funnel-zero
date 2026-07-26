@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title">
+  <title id="title">KRANO</title>
+  <rect width="512" height="512" rx="112" fill="#0b1020"/>
+  <path d="M104 116h304v64H104zm48 108h208v64H152zm56 108h96v64h-96z" fill="#f48120"/>
+  <circle cx="256" cy="424" r="28" fill="#fff"/>
+</svg>

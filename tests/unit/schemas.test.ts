@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { loginSchema, setupSchema } from "../../packages/shared/src/schemas";
+import {
+  changePasswordSchema,
+  loginSchema,
+  setupSchema
+} from "../../packages/shared/src/schemas";
 
 describe("setupSchema", () => {
   it("aceita credenciais fortes", () => {
@@ -38,5 +42,18 @@ describe("setupSchema", () => {
 describe("loginSchema", () => {
   it("limita payloads inesperados", () => {
     expect(loginSchema.safeParse({ email: "a@example.com", password: "x".repeat(129) }).success).toBe(false);
+  });
+});
+
+describe("changePasswordSchema", () => {
+  it("exige uma nova senha forte", () => {
+    expect(changePasswordSchema.safeParse({
+      currentPassword: "Senha-forte-2026!",
+      newPassword: "Nova-senha-2026!"
+    }).success).toBe(true);
+    expect(changePasswordSchema.safeParse({
+      currentPassword: "Senha-forte-2026!",
+      newPassword: "senha-fraca"
+    }).success).toBe(false);
   });
 });

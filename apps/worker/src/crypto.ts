@@ -17,6 +17,36 @@ export async function sha256(value: string): Promise<string> {
   return toHex(new Uint8Array(digest));
 }
 
+export async function sha256Base64Url(value: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", encoder.encode(value));
+  return toBase64Url(new Uint8Array(digest));
+}
+
+export async function sealSecret(value: string, secret: string): Promise<string> {
+  const key = await encryptionKey(secret);
+  const iv = new Uint8Array(12);
+  crypto.getRandomValues(iv);
+  const ciphertext = await crypto.subtle.encrypt(
+    { name: "AES-GCM", iv },
+    key,
+    encoder.encode(value)
+  );
+  return `v1.${toBase64Url(iv)}.${toBase64Url(new Uint8Array(ciphertext))}`;
+}
+
+export async function openSecret(value: string, secret: string): Promise<string> {
+  const [version, ivValue, ciphertextValue] = value.split(".");
+  if (version !== "v1" || !ivValue || !ciphertextValue) {
+    throw new Error("Segredo protegido inválido.");
+  }
+  const plaintext = await crypto.subtle.decrypt(
+    { name: "AES-GCM", iv: fromBase64Url(ivValue) },
+    await encryptionKey(secret),
+    fromBase64Url(ciphertextValue)
+  );
+  return new TextDecoder().decode(plaintext);
+}
+
 export async function hmac(value: string, secret: string): Promise<string> {
   const key = await crypto.subtle.importKey(
     "raw",
@@ -54,7 +84,10 @@ export async function verifyPassword(
   const expected = fromHex(expectedHash);
   const derivedDigest = await crypto.subtle.digest("SHA-256", derived);
   const expectedDigest = await crypto.subtle.digest("SHA-256", expected);
-  return crypto.subtle.timingSafeEqual(derivedDigest, expectedDigest);
+  const subtle = crypto.subtle as SubtleCrypto & {
+    timingSafeEqual(a: ArrayBuffer | ArrayBufferView, b: ArrayBuffer | ArrayBufferView): boolean;
+  };
+  return subtle.timingSafeEqual(derivedDigest, expectedDigest);
 }
 
 async function derivePassword(
@@ -71,6 +104,14 @@ async function derivePassword(
     256
   );
   return new Uint8Array(bits);
+}
+
+async function encryptionKey(secret: string): Promise<CryptoKey> {
+  const digest = await crypto.subtle.digest("SHA-256", encoder.encode(secret));
+  return crypto.subtle.importKey("raw", digest, { name: "AES-GCM" }, false, [
+    "encrypt",
+    "decrypt"
+  ]);
 }
 
 function toHex(bytes: Uint8Array): string {

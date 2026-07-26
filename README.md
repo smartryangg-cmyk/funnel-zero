@@ -1,8 +1,8 @@
-# Funnel Zero
+# KRANO
 
 > **Teste ofertas, não ferramentas.**
 
-Funnel Zero é uma plataforma open source e autohospedada para construir e analisar funis de vendas usando Cloudflare Workers, Workers Static Assets, D1 e R2. Cada instalação pertence à conta Cloudflare da própria pessoa.
+KRANO é uma plataforma open source e autohospedada para construir e analisar funis de vendas usando Cloudflare Workers, Workers Static Assets, D1 e R2. Cada instalação pertence à conta Cloudflare da própria pessoa.
 
 Este repositório contém o **MVP operacional completo**: instalação idempotente, painel administrativo, ofertas, mapa visual de funil, editor/publicação de páginas, biblioteca R2, player VSL, tracking, A/B, integrações e operação segura.
 
@@ -25,7 +25,8 @@ Este repositório contém o **MVP operacional completo**: instalação idempoten
 - testes A/B com atribuição persistente e aviso de amostra;
 - Meta Pixel e GA4 por IDs validados;
 - checkout externo com UTMs e identificador anônimo;
-- domínios próprios por API opcional com confirmação textual;
+- conexão guiada à Cloudflare por OAuth oficial com PKCE ou autorização oficial pré-preenchida;
+- publicação de domínios próprios com DNS e SSL automáticos;
 - modo `FREE_ONLY=true`;
 - limpeza agendada de sessões, tentativas e métricas antigas;
 - instalador local idempotente;
@@ -39,21 +40,34 @@ Pré-requisitos:
 
 - Node.js 20 ou superior;
 - conta Cloudflare;
-- autenticação local do Wrangler (`npx wrangler login`);
 - plano gratuito é suficiente para testar o MVP dentro das franquias atuais.
 
+Clone o repositório e execute somente o instalador:
+
+**Windows:** dê dois cliques em `INSTALAR-KRANO.cmd`.
+
+**macOS ou Linux:**
+
 ```bash
-git clone <repositorio>
+git clone https://github.com/smartryangg-cmyk/funnel-zero.git
 cd funnel-zero
-npm install
-npm run setup
+sh install.sh
 ```
+
+Alternativa multiplataforma:
+
+```bash
+node install.mjs
+```
+
+O próprio instalador baixa as dependências. Não é necessário executar `npm install`
+ou conhecer Wrangler, D1, R2, DNS ou comandos da Cloudflare.
 
 O instalador:
 
-1. verifica Node, Wrangler e autenticação;
-2. seleciona a conta quando necessário;
-3. cria ou reutiliza recursos com prefixo `funnel-zero`;
+1. verifica Node e Wrangler;
+2. abre a autorização oficial da Cloudflare e seleciona a conta quando necessário;
+3. cria ou reutiliza recursos com prefixo `krano`;
 4. cria D1 e R2 Standard;
 5. atualiza bindings;
 6. aplica migrations;
@@ -65,7 +79,7 @@ O instalador:
 
 Executar o instalador novamente reutiliza os recursos do mesmo nome. Ele não exclui nem altera recursos sem o prefixo e o manifesto da instalação.
 
-### Futuro `npx funnel-zero`
+### CLI local
 
 O pacote CLI está em `packages/cli` e já pode ser testado localmente:
 
@@ -136,6 +150,8 @@ Workers Static Assets usa `run_worker_first` apenas para `/api/*` e rotas privad
 
 - nenhum segredo fica no Git;
 - o secret de sessão é enviado ao Wrangler por entrada padrão;
+- credenciais OAuth ou token guiado da Cloudflare ficam somente nos secrets do Worker;
+- o fluxo de conexão usa Authorization Code com PKCE S256 e estado de uso único;
 - tokens de configuração e sessão são armazenados apenas como hash/HMAC;
 - o token inicial expira em duas horas e é invalidado no primeiro uso;
 - mutações exigem mesma origem;
@@ -147,6 +163,14 @@ Workers Static Assets usa `run_worker_first` apenas para `/api/*` e rotas privad
 - CSP, `nosniff`, `frame-ancestors` e políticas de navegador são aplicados.
 
 Consulte [SECURITY.md](./SECURITY.md) antes de operar publicamente.
+
+## Conexão com a Cloudflare e domínios
+
+No painel, o administrador escolhe **Conectar KRANO à Cloudflare**. Quando um cliente OAuth público está configurado, a tela oficial da Cloudflare mostra o aplicativo, a conta e as permissões solicitadas. Em qualquer clone instalado pelo GitHub, o fluxo guiado abre a tela oficial de criação de token com conta e permissões já preenchidas; o usuário apenas cria, copia e cola o código uma vez.
+
+Depois da autorização, a área **Domínios** lista automaticamente os domínios ativos da conta. O usuário informa apenas o subdomínio, escolhe um funil realmente publicado e confirma **Publicar neste endereço**. A API oficial da Cloudflare cria o vínculo, configura o DNS e emite o SSL sem exigir Account ID, Zone ID ou novo deploy.
+
+Credenciais nunca são gravadas no D1: ficam como secrets do próprio Worker da instalação. O token guiado recebe somente Account Settings Read, Workers Scripts Edit, Workers Routes Edit e Zone Edit, restritos à conta instalada. Consulte [docs/CLOUDFLARE-OAUTH.md](./docs/CLOUDFLARE-OAUTH.md).
 
 ## FREE_ONLY
 
@@ -193,7 +217,7 @@ A migration cria **Plano Próxima Série — Demonstração**, um funil publicad
 ## Limitações conhecidas
 
 - backup automático dos objetos R2 exige ferramenta S3 externa;
-- o domínio `workers.dev` funciona imediatamente; domínios próprios exigem token opcional e confirmação explícita;
+- o domínio `workers.dev` funciona imediatamente; instalações sem cliente OAuth usam a autorização guiada por token oficial pré-preenchido;
 - upload multipart depende dos limites de corpo e CPU do plano Cloudflare em uso;
 - métricas e testes A/B são indicativos, não um motor estatístico de decisão;
 - não há processamento de pagamento.

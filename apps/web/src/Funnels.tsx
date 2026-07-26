@@ -33,6 +33,7 @@ function FunnelList() {
   const [funnels, setFunnels] = useState<FunnelSummary[]>([]);
   const [offers, setOffers] = useState<OfferSummary[]>([]);
   const [creating, setCreating] = useState(false);
+  const [deletingId, setDeletingId] = useState("");
   const [error, setError] = useState("");
   const selectedOffer = new URLSearchParams(location.search).get("offer") ?? undefined;
 
@@ -49,6 +50,20 @@ function FunnelList() {
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { void load(); }, [selectedOffer]);
+
+  async function removeFunnel(funnel: FunnelSummary) {
+    if (!confirm(`Excluir o funil "${funnel.name}"?\n\nAs páginas serão preservadas e desvinculadas. Domínios vinculados precisam ser removidos antes.`)) return;
+    setDeletingId(funnel.id);
+    setError("");
+    try {
+      await api.deleteFunnel(funnel.id);
+      await load();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Falha ao excluir funil.");
+    } finally {
+      setDeletingId("");
+    }
+  }
 
   return (
     <>
@@ -73,6 +88,9 @@ function FunnelList() {
               <div className="entity-actions">
                 <button className="button secondary" onClick={() => navigate(`/funnels/${funnel.id}`)}>Editar mapa</button>
                 <button className="button ghost" onClick={() => { void api.duplicateFunnel(funnel.id).then((result) => navigate(`/funnels/${result.funnel.id}`)); }}>Duplicar</button>
+                <button className="button danger" disabled={deletingId === funnel.id} onClick={() => void removeFunnel(funnel)}>
+                  {deletingId === funnel.id ? "Excluindo…" : "Excluir"}
+                </button>
               </div>
             </article>
           ))}
@@ -218,6 +236,18 @@ function FunnelBuilder({ id }: { id: string }) {
     }
   }
 
+  async function removeFunnel() {
+    if (!funnel || !confirm(`Excluir o funil "${funnel.name}"?\n\nAs páginas serão preservadas e desvinculadas.`)) return;
+    setSaving(true);
+    try {
+      await api.deleteFunnel(funnel.id);
+      navigate("/funnels");
+    } catch (caught) {
+      setMessage(caught instanceof Error ? caught.message : "Falha ao excluir funil.");
+      setSaving(false);
+    }
+  }
+
   if (!funnel) return <div className="panel skeleton tall" />;
   return (
     <>
@@ -225,7 +255,7 @@ function FunnelBuilder({ id }: { id: string }) {
         eyebrow="Editor de funil"
         title={funnel.name}
         subtitle={`${funnel.offerName ?? "Sem oferta"} · conecte as etapas pelas alças laterais.`}
-        actions={<><button className="button secondary" onClick={() => void save(false)} disabled={saving}>Salvar</button><button className="button primary" onClick={() => void save(true)} disabled={saving}>Publicar</button></>}
+        actions={<><button className="button danger" onClick={() => void removeFunnel()} disabled={saving}>Excluir funil</button><button className="button secondary" onClick={() => void save(false)} disabled={saving}>Salvar</button><button className="button primary" onClick={() => void save(true)} disabled={saving}>Publicar</button></>}
       />
       <div className="builder-toolbar">
         <button onClick={() => addNode("page", "Página")}>+ Página</button>

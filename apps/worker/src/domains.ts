@@ -1,18 +1,19 @@
 import type { SessionUser } from "../../../packages/shared/src/schemas";
+import {
+  cfRequest,
+  CloudflareApiError,
+  providerConfig,
+  providerStatus
+} from "./cloudflare";
 import { randomId } from "./crypto";
 import { errorResponse, json, readJson, requireSameOrigin } from "./http";
 import {
   audit,
-  optionalString,
   parseBodyRecord,
   requiredString,
   safeJson,
   ValidationError
 } from "./platform";
-
-interface SettingRow {
-  value_json: string;
-}
 
 interface DomainRow {
   id: string;
@@ -25,24 +26,59 @@ interface DomainRow {
   last_checked_at: string | null;
 }
 
-interface ProviderConfig {
-  configured: boolean;
-  accountId: string;
-  workerName: string;
-}
-
 interface CloudflareDomain {
   id: string;
+  cert_id?: string;
   hostname: string;
   service: string;
   zone_id: string;
   zone_name: string;
 }
 
-interface CloudflareResponse<T> {
-  success: boolean;
-  result: T;
-  errors?: Array<{ message?: string }>;
+interface CloudflareZone {
+  id: string;
+  name: string;
+  status: string;
+  name_servers?: string[];
+}
+
+interface DomainRouteRow {
+  domain_id: string;
+  offer_slug: string | null;
+  page_slug: string | null;
+}
+
+function cloudflareDomainError(error: CloudflareApiError): Response {
+  const message = error.message.toLowerCase();
+  if (
+    message.includes("account.zone.create") ||
+    message.includes("requires permission")
+  ) {
+    return errorResponse(
+      403,
+      "CLOUDFLARE_ZONE_PERMISSION_REQUIRED",
+      "A permissão para adicionar domínios precisa ser atualizada. Clique em “Atualizar permissão” e autorize novamente na Cloudflare."
+    );
+  }
+  if (message.includes("already exists") || message.includes("already been claimed")) {
+    return errorResponse(
+      409,
+      "CLOUDFLARE_ZONE_ALREADY_EXISTS",
+      "Esse domínio já está cadastrado em outra conta Cloudflare. Conecte a conta correta ou remova o domínio da conta anterior."
+    );
+  }
+  if (error.status === 401 || error.status === 403) {
+    return errorResponse(
+      403,
+      "CLOUDFLARE_REAUTHORIZE_REQUIRED",
+      "A autorização da Cloudflare expirou ou não cobre esta ação. Reconecte a conta e tente novamente."
+    );
+  }
+  return errorResponse(
+    error.status >= 500 ? 502 : 400,
+    "CLOUDFLARE_DOMAIN_ERROR",
+    `A Cloudflare recusou o domínio: ${error.message}`
+  );
 }
 
 function normalizeHostname(value: string): string {
@@ -56,52 +92,15 @@ function normalizeHostname(value: string): string {
   return hostname;
 }
 
-async function providerConfig(env: Env): Promise<ProviderConfig> {
-  const row = await env.DB.prepare(
-    "SELECT value_json FROM installation_settings WHERE key = 'domain_provider'"
-  ).first<SettingRow>();
-  return safeJson<ProviderConfig>(row?.value_json, {
-    configured: false,
-    accountId: "",
-    workerName: ""
-  });
-}
-
-async function cfRequest<T>(
-  env: Env,
-  path: string,
-  init: RequestInit = {}
-): Promise<T> {
-  if (!env.CLOUDFLARE_API_TOKEN) throw new ValidationError("Token da Cloudflare não configurado.");
-  const response = await fetch(`https://api.cloudflare.com/client/v4${path}`, {
-    ...init,
-    headers: {
-      Authorization: `Bearer ${env.CLOUDFLARE_API_TOKEN}`,
-      "Content-Type": "application/json",
-      ...init.headers
-    }
-  });
-  const payload = await response.json<CloudflareResponse<T>>();
-  if (!response.ok || !payload.success) {
-    throw new ValidationError(
-      payload.errors?.[0]?.message ?? "A Cloudflare recusou a operação de domínio."
-    );
-  }
-  return payload.result;
-}
-
 async function readDomains(env: Env) {
   const result = await env.DB.prepare(
     `SELECT d.*, f.name AS funnel_name FROM domains d
      LEFT JOIN funnels f ON f.id = d.funnel_id ORDER BY d.created_at DESC`
   ).all<DomainRow>();
-  const provider = await providerConfig(env);
   return {
-    provider: {
-      ...provider,
-      tokenAvailable: Boolean(env.CLOUDFLARE_API_TOKEN)
-    },
+    provider: await providerStatus(env),
     domains: result.results.map((row) => ({
+      ...safeJson<{ zoneName?: string; certIssued?: boolean }>(row.provider_config_json, {}),
       id: row.id,
       funnelId: row.funnel_id,
       funnelName: row.funnel_name,
@@ -113,50 +112,102 @@ async function readDomains(env: Env) {
   };
 }
 
-async function saveProvider(
+async function listZones(env: Env): Promise<Response> {
+  const provider = await providerConfig(env);
+  if (!provider.connected || !provider.accountId) {
+    return errorResponse(
+      409,
+      "PROVIDER_NOT_CONFIGURED",
+      "Conecte sua conta Cloudflare para ver os domínios disponíveis."
+    );
+  }
+  const zones = await listAllZones(env, provider.accountId);
+  return json({
+    zones: zones.map(({ id, name, status, name_servers }) => ({
+      id,
+      name,
+      status,
+      nameServers: name_servers ?? []
+    }))
+  });
+}
+
+async function listAllZones(env: Env, accountId: string): Promise<CloudflareZone[]> {
+  const zones: CloudflareZone[] = [];
+  const perPage = 50;
+  for (let page = 1; page <= 20; page += 1) {
+    const current = await cfRequest<CloudflareZone[]>(
+      env,
+      `/zones?account.id=${encodeURIComponent(accountId)}&per_page=${perPage}&page=${page}`
+    );
+    zones.push(...current);
+    if (current.length < perPage) break;
+  }
+  return zones;
+}
+
+async function listWorkerDomains(
+  env: Env,
+  accountId: string,
+  workerName: string
+): Promise<CloudflareDomain[]> {
+  const domains: CloudflareDomain[] = [];
+  const perPage = 100;
+  for (let page = 1; page <= 20; page += 1) {
+    const current = await cfRequest<CloudflareDomain[]>(
+      env,
+      `/accounts/${encodeURIComponent(accountId)}/workers/domains?service=${encodeURIComponent(workerName)}&per_page=${perPage}&page=${page}`
+    );
+    domains.push(...current);
+    if (current.length < perPage) break;
+  }
+  return domains;
+}
+
+async function importExternalDomain(
   request: Request,
   env: Env,
   user: SessionUser
 ): Promise<Response> {
   const body = parseBodyRecord(await readJson(request, 16_000));
-  const accountId = requiredString(body.accountId, "Account ID", 64);
-  const workerName = requiredString(body.workerName, "Worker", 80);
-  if (!/^[a-f0-9]{32}$/i.test(accountId)) {
-    throw new ValidationError("Account ID inválido.");
-  }
-  if (!/^[a-z0-9][a-z0-9-]{1,62}$/i.test(workerName)) {
-    throw new ValidationError("Nome do Worker inválido.");
-  }
-  const config: ProviderConfig = { configured: true, accountId, workerName };
-  await env.DB.batch([
-    env.DB.prepare(
-      `INSERT INTO installation_settings(key, value_json, updated_at)
-       VALUES ('domain_provider', ?, datetime('now'))
-       ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = datetime('now')`
-    ).bind(JSON.stringify(config)),
-    audit(env, user.id, "domain_provider.updated", "settings", "domain_provider", {
-      accountId,
-      workerName,
-      tokenStoredInSecret: Boolean(env.CLOUDFLARE_API_TOKEN)
-    })
-  ]);
-  return json({ provider: { ...config, tokenAvailable: Boolean(env.CLOUDFLARE_API_TOKEN) } });
-}
-
-async function listZones(env: Env): Promise<Response> {
+  const domain = normalizeHostname(requiredString(body.domain, "Domínio", 253));
   const provider = await providerConfig(env);
-  if (!provider.configured || !env.CLOUDFLARE_API_TOKEN) {
+  if (!provider.connected || !provider.accountId) {
     return errorResponse(
       409,
       "PROVIDER_NOT_CONFIGURED",
-      "Configure o Account ID, o Worker e o secret CLOUDFLARE_API_TOKEN."
+      "Conecte sua conta Cloudflare antes de importar o domínio."
     );
   }
-  const zones = await cfRequest<Array<{ id: string; name: string; status: string }>>(
+  const existing = await cfRequest<CloudflareZone[]>(
     env,
-    `/zones?account.id=${encodeURIComponent(provider.accountId)}&per_page=50`
+    `/zones?account.id=${encodeURIComponent(provider.accountId)}&name=${encodeURIComponent(domain)}&per_page=1`
   );
-  return json({ zones: zones.map(({ id, name, status }) => ({ id, name, status })) });
+  const zone = existing[0] ?? await cfRequest<CloudflareZone>(
+    env,
+    "/zones",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        account: { id: provider.accountId },
+        name: domain,
+        type: "full"
+      })
+    }
+  );
+  await audit(env, user.id, "domain.import_started", "zone", zone.id, {
+    domain,
+    status: zone.status
+  }).run();
+  return json({
+    zone: {
+      id: zone.id,
+      name: zone.name,
+      status: zone.status,
+      nameServers: zone.name_servers ?? []
+    },
+    registrarStepRequired: zone.status !== "active"
+  }, { status: existing[0] ? 200 : 201 });
 }
 
 async function attachDomain(
@@ -166,19 +217,58 @@ async function attachDomain(
 ): Promise<Response> {
   const body = parseBodyRecord(await readJson(request, 32_000));
   const hostname = normalizeHostname(requiredString(body.hostname, "Domínio", 253));
-  if (body.confirmation !== hostname) {
-    throw new ValidationError("Confirme digitando exatamente o domínio.");
+  const funnelId = requiredString(body.funnelId, "Funil", 100);
+  const existing = await env.DB.prepare(
+    "SELECT id, status FROM domains WHERE hostname = ? LIMIT 1"
+  )
+    .bind(hostname)
+    .first<{ id: string; status: string }>();
+  if (existing && existing.status !== "failed") {
+    throw new ValidationError("Esse endereço já está publicado na KRANO.");
+  }
+  const funnel = await env.DB.prepare(
+    `SELECT f.id
+     FROM funnels f
+     JOIN pages p
+       ON p.funnel_id = f.id
+      AND p.status = 'published'
+      AND p.published_version_id IS NOT NULL
+     JOIN offers o
+       ON o.id = p.offer_id
+      AND o.status = 'active'
+     WHERE f.id = ? AND f.status = 'published'
+     LIMIT 1`
+  )
+    .bind(funnelId)
+    .first<{ id: string }>();
+  if (!funnel) {
+    throw new ValidationError(
+      "Publique o funil e pelo menos uma página dele antes de conectar o domínio."
+    );
   }
   const provider = await providerConfig(env);
-  if (!provider.configured || !env.CLOUDFLARE_API_TOKEN) {
+  if (!provider.connected || !provider.accountId) {
     return errorResponse(
       409,
       "PROVIDER_NOT_CONFIGURED",
       "A conexão Cloudflare ainda não está configurada."
     );
   }
-  const zoneId = requiredString(body.zoneId, "Zona", 64);
-  const zoneName = normalizeHostname(requiredString(body.zoneName, "Nome da zona", 253));
+  const zones = await listAllZones(env, provider.accountId);
+  const zone = zones
+    .filter(({ name, status }) => {
+      const normalizedName = name.toLowerCase();
+      return (
+        status === "active" &&
+        (hostname === normalizedName || hostname.endsWith(`.${normalizedName}`))
+      );
+    })
+    .sort((first, second) => second.name.length - first.name.length)[0];
+  if (!zone) {
+    throw new ValidationError(
+      "Esse endereço não pertence a um domínio ativo da conta autorizada."
+    );
+  }
   const attached = await cfRequest<CloudflareDomain>(
     env,
     `/accounts/${encodeURIComponent(provider.accountId)}/workers/domains`,
@@ -187,50 +277,85 @@ async function attachDomain(
       body: JSON.stringify({
         hostname,
         service: provider.workerName,
-        zone_id: zoneId,
-        zone_name: zoneName
+        zone_id: zone.id,
+        zone_name: zone.name
       })
     }
   );
-  const id = randomId();
+  const domainStatus = attached.cert_id ? "active" : "validating";
+  const id = existing?.id ?? randomId();
   await env.DB.batch([
     env.DB.prepare(
       `INSERT INTO domains(
         id, funnel_id, hostname, status, is_primary, provider_config_json, last_checked_at
-       ) VALUES (?, ?, ?, 'active', ?, ?, datetime('now'))`
+       ) VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+       ON CONFLICT(hostname) DO UPDATE SET
+         funnel_id = excluded.funnel_id,
+         status = excluded.status,
+         is_primary = excluded.is_primary,
+         provider_config_json = excluded.provider_config_json,
+         last_checked_at = datetime('now'),
+         updated_at = datetime('now')`
     ).bind(
       id,
-      optionalString(body.funnelId, 100),
+      funnelId,
       hostname,
+      domainStatus,
       body.isPrimary === true ? 1 : 0,
-      JSON.stringify({ domainId: attached.id, zoneId, zoneName })
+      JSON.stringify({
+        domainId: attached.id,
+        zoneId: zone.id,
+        zoneName: zone.name,
+        certIssued: Boolean(attached.cert_id)
+      })
     ),
     audit(env, user.id, "domain.attached", "domain", id, { hostname })
   ]);
-  return json({ id, hostname, status: "active" }, { status: 201 });
+  return json({ id, hostname, status: domainStatus }, { status: 201 });
 }
 
 async function syncDomains(env: Env, user: SessionUser): Promise<Response> {
   const provider = await providerConfig(env);
-  if (!provider.configured || !env.CLOUDFLARE_API_TOKEN) {
+  if (!provider.connected || !provider.accountId) {
     return errorResponse(409, "PROVIDER_NOT_CONFIGURED", "A conexão Cloudflare não está configurada.");
   }
-  const remote = await cfRequest<CloudflareDomain[]>(
-    env,
-    `/accounts/${encodeURIComponent(provider.accountId)}/workers/domains?service=${encodeURIComponent(provider.workerName)}`
-  );
+  const remote = await listWorkerDomains(env, provider.accountId, provider.workerName);
   const local = await env.DB.prepare(
-    "SELECT id, hostname FROM domains"
-  ).all<{ id: string; hostname: string }>();
+    "SELECT id, hostname, provider_config_json FROM domains"
+  ).all<{ id: string; hostname: string; provider_config_json: string }>();
   const statements = local.results.map((row) => {
-    const active = remote.some((item) => item.hostname === row.hostname);
+    const match = remote.find((item) => item.hostname === row.hostname);
+    const current = safeJson<Record<string, unknown>>(row.provider_config_json, {});
+    const status = match ? (match.cert_id ? "active" : "validating") : "failed";
     return env.DB.prepare(
-      "UPDATE domains SET status = ?, last_checked_at = datetime('now'), updated_at = datetime('now') WHERE id = ?"
-    ).bind(active ? "active" : "failed", row.id);
+      `UPDATE domains
+       SET status = ?, provider_config_json = ?, last_checked_at = datetime('now'),
+           updated_at = datetime('now')
+       WHERE id = ?`
+    ).bind(
+      status,
+      JSON.stringify(
+        match
+          ? {
+              ...current,
+              domainId: match.id,
+              zoneId: match.zone_id,
+              zoneName: match.zone_name,
+              certIssued: Boolean(match.cert_id)
+            }
+          : { ...current, certIssued: false }
+      ),
+      row.id
+    );
   });
   statements.push(audit(env, user.id, "domains.synced", "domain", "all", { count: remote.length }));
   await env.DB.batch(statements);
-  return json({ ok: true, remoteCount: remote.length });
+  return json({
+    ok: true,
+    remoteCount: remote.length,
+    activeCount: remote.filter((item) => Boolean(item.cert_id)).length,
+    validatingCount: remote.filter((item) => !item.cert_id).length
+  });
 }
 
 async function detachDomain(
@@ -249,7 +374,7 @@ async function detachDomain(
   }
   const provider = await providerConfig(env);
   const remoteId = safeJson<{ domainId?: string }>(row.provider_config_json, {}).domainId;
-  if (!provider.configured || !env.CLOUDFLARE_API_TOKEN || !remoteId) {
+  if (!provider.connected || !provider.accountId || !remoteId) {
     return errorResponse(409, "PROVIDER_NOT_CONFIGURED", "Não é possível remover sem a conexão Cloudflare.");
   }
   await cfRequest<unknown>(
@@ -262,6 +387,45 @@ async function detachDomain(
     audit(env, user.id, "domain.detached", "domain", id, { hostname: row.hostname })
   ]);
   return json({ ok: true });
+}
+
+export async function resolveCustomDomainUrl(
+  env: Env,
+  url: URL
+): Promise<{ matched: boolean; publicUrl: URL | null }> {
+  const pageSlug =
+    url.pathname === "/"
+      ? null
+      : /^\/[a-z0-9][a-z0-9-]{0,99}\/?$/i.test(url.pathname)
+        ? url.pathname.slice(1).replace(/\/$/, "")
+        : "__unmatched__";
+  const row = await env.DB.prepare(
+    `SELECT d.id AS domain_id, o.slug AS offer_slug, p.slug AS page_slug
+     FROM domains d
+     LEFT JOIN funnels f
+       ON f.id = d.funnel_id AND f.status = 'published'
+     LEFT JOIN pages p
+       ON p.funnel_id = f.id
+      AND p.status = 'published'
+      AND p.published_version_id IS NOT NULL
+      AND (? IS NULL OR p.slug = ?)
+     LEFT JOIN offers o
+       ON o.id = p.offer_id AND o.status = 'active'
+     WHERE d.hostname = ? AND d.status = 'active'
+     ORDER BY
+       CASE p.page_type WHEN 'vsl' THEN 0 WHEN 'sales' THEN 1 ELSE 2 END,
+       p.created_at
+     LIMIT 1`
+  )
+    .bind(pageSlug, pageSlug, url.hostname.toLowerCase())
+    .first<DomainRouteRow>();
+  if (!row) return { matched: false, publicUrl: null };
+  if (!row.offer_slug || !row.page_slug || pageSlug === "__unmatched__") {
+    return { matched: true, publicUrl: null };
+  }
+  const publicUrl = new URL(url);
+  publicUrl.pathname = `/o/${encodeURIComponent(row.offer_slug)}/${encodeURIComponent(row.page_slug)}`;
+  return { matched: true, publicUrl };
 }
 
 export async function handleDomainsApi(
@@ -278,24 +442,27 @@ export async function handleDomainsApi(
     if (url.pathname === "/api/domains" && request.method === "GET") {
       return json(await readDomains(env));
     }
-    if (url.pathname === "/api/domains/provider" && request.method === "PATCH") {
-      return saveProvider(request, env, user);
-    }
     if (url.pathname === "/api/domains/zones" && request.method === "GET") {
-      return listZones(env);
+      return await listZones(env);
+    }
+    if (url.pathname === "/api/domains/import" && request.method === "POST") {
+      return await importExternalDomain(request, env, user);
     }
     if (url.pathname === "/api/domains" && request.method === "POST") {
-      return attachDomain(request, env, user);
+      return await attachDomain(request, env, user);
     }
     if (url.pathname === "/api/domains/sync" && request.method === "POST") {
-      return syncDomains(env, user);
+      return await syncDomains(env, user);
     }
     const match = url.pathname.match(/^\/api\/domains\/([^/]+)$/);
     if (match && request.method === "DELETE") {
-      return detachDomain(request, env, user, match[1]);
+      return await detachDomain(request, env, user, match[1]);
     }
     return errorResponse(404, "NOT_FOUND", "Rota de domínio não encontrada.");
   } catch (error) {
+    if (error instanceof CloudflareApiError) {
+      return cloudflareDomainError(error);
+    }
     if (error instanceof ValidationError) {
       return errorResponse(400, "VALIDATION_ERROR", error.message);
     }

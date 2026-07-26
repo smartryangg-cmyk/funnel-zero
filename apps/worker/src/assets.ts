@@ -1,4 +1,9 @@
-import type { AssetSummary, SessionUser } from "../../../packages/shared/src/schemas";
+import type {
+  AssetSummary,
+  PlayerConfig,
+  SessionUser,
+  VideoMetrics
+} from "../../../packages/shared/src/schemas";
 import { randomId } from "./crypto";
 import { errorResponse, json, readJson, requireSameOrigin } from "./http";
 import {
@@ -7,6 +12,7 @@ import {
   optionalString,
   parseBodyRecord,
   requiredString,
+  safeJson,
   sanitizeFileName,
   ValidationError
 } from "./platform";
@@ -22,12 +28,73 @@ interface AssetRow {
   byte_size: number;
   upload_status: "pending" | "uploading" | "ready" | "failed" | "deleting";
   multipart_upload_id: string | null;
+  player_config_json: string;
   created_at: string;
 }
 
 interface PartRow {
   part_number: number;
   etag: string;
+}
+
+export const DEFAULT_PLAYER_CONFIG: PlayerConfig = {
+  showControls: true,
+  showVolume: true,
+  timelineStyle: "real",
+  allowSeek: true,
+  resumePlayback: true,
+  showSpeed: false,
+  showQuality: false,
+  autoplayMuted: false,
+  clickToPause: true,
+  protectVideo: true,
+  watermark: "",
+  ctaAtSeconds: 0,
+  qualitySources: []
+};
+
+function normalizePlayerConfig(value: unknown): PlayerConfig {
+  const input =
+    value && typeof value === "object" && !Array.isArray(value)
+      ? value as Record<string, unknown>
+      : {};
+  const qualitySources = Array.isArray(input.qualitySources)
+    ? input.qualitySources
+        .slice(0, 3)
+        .map((item) =>
+          item && typeof item === "object" && !Array.isArray(item)
+            ? item as Record<string, unknown>
+            : {}
+        )
+        .filter(
+          (item) =>
+            ["360p", "720p", "1080p"].includes(String(item.label)) &&
+            typeof item.assetId === "string" &&
+            /^[a-zA-Z0-9-]{8,100}$/.test(item.assetId)
+        )
+        .map((item) => ({
+          label: String(item.label) as "360p" | "720p" | "1080p",
+          assetId: String(item.assetId)
+        }))
+    : [];
+  const timelineStyle = ["real", "minimal", "hidden"].includes(String(input.timelineStyle))
+    ? String(input.timelineStyle) as PlayerConfig["timelineStyle"]
+    : DEFAULT_PLAYER_CONFIG.timelineStyle;
+  return {
+    showControls: input.showControls !== false,
+    showVolume: input.showVolume !== false,
+    timelineStyle,
+    allowSeek: input.allowSeek !== false,
+    resumePlayback: input.resumePlayback !== false,
+    showSpeed: input.showSpeed === true,
+    showQuality: input.showQuality === true,
+    autoplayMuted: input.autoplayMuted === true,
+    clickToPause: input.clickToPause !== false,
+    protectVideo: input.protectVideo !== false,
+    watermark: typeof input.watermark === "string" ? input.watermark.trim().slice(0, 40) : "",
+    ctaAtSeconds: Math.min(Math.max(Number(input.ctaAtSeconds) || 0, 0), 86_400),
+    qualitySources
+  };
 }
 
 function mapAsset(row: AssetRow): AssetSummary {
@@ -41,14 +108,17 @@ function mapAsset(row: AssetRow): AssetSummary {
     byteSize: Number(row.byte_size),
     uploadStatus: row.upload_status,
     createdAt: row.created_at,
-    url: row.upload_status === "ready" ? `/media/${row.id}` : null
+    url: row.upload_status === "ready" ? `/media/${row.id}` : null,
+    playerConfig: normalizePlayerConfig(
+      safeJson<unknown>(row.player_config_json, DEFAULT_PLAYER_CONFIG)
+    )
   };
 }
 
 async function findAsset(env: Env, id: string): Promise<AssetRow | null> {
   return env.DB.prepare(
     `SELECT id, offer_id, object_key, original_name, media_type, mime_type, extension,
-     byte_size, upload_status, multipart_upload_id, created_at
+     byte_size, upload_status, multipart_upload_id, player_config_json, created_at
      FROM assets WHERE id = ? AND deleted_at IS NULL`
   ).bind(id).first<AssetRow>();
 }
@@ -56,7 +126,7 @@ async function findAsset(env: Env, id: string): Promise<AssetRow | null> {
 async function listAssets(env: Env): Promise<AssetSummary[]> {
   const result = await env.DB.prepare(
     `SELECT id, offer_id, object_key, original_name, media_type, mime_type, extension,
-     byte_size, upload_status, multipart_upload_id, created_at
+     byte_size, upload_status, multipart_upload_id, player_config_json, created_at
      FROM assets WHERE deleted_at IS NULL ORDER BY created_at DESC`
   ).all<AssetRow>();
   return result.results.map(mapAsset);
@@ -202,20 +272,104 @@ async function abort(env: Env, user: SessionUser, id: string): Promise<Response>
   return json({ ok: true });
 }
 
-async function rename(
+async function updateAsset(
   request: Request,
   env: Env,
   user: SessionUser,
   id: string
 ): Promise<Response> {
   const body = parseBodyRecord(await readJson(request, 16_000));
-  const name = requiredString(body.name, "Nome", 180);
+  const name = optionalString(body.name, 180);
+  const playerConfig =
+    body.playerConfig && typeof body.playerConfig === "object" && !Array.isArray(body.playerConfig)
+      ? normalizePlayerConfig(body.playerConfig)
+      : null;
+  if (!name && !playerConfig) {
+    throw new ValidationError("Informe um nome ou configuração do player.");
+  }
+  if (playerConfig?.qualitySources.length) {
+    const qualityIds = playerConfig.qualitySources.map((item) => item.assetId);
+    const placeholders = qualityIds.map(() => "?").join(",");
+    const videos = await env.DB.prepare(
+      `SELECT id FROM assets
+       WHERE id IN (${placeholders}) AND media_type = 'video'
+         AND upload_status = 'ready' AND deleted_at IS NULL`
+    ).bind(...qualityIds).all<{ id: string }>();
+    if (videos.results.length !== new Set(qualityIds).size) {
+      throw new ValidationError("Uma das qualidades escolhidas não está disponível.");
+    }
+  }
   const result = await env.DB.prepare(
-    "UPDATE assets SET original_name = ?, updated_at = datetime('now') WHERE id = ? AND deleted_at IS NULL"
-  ).bind(name, id).run();
+    `UPDATE assets SET
+       original_name = COALESCE(?, original_name),
+       player_config_json = COALESCE(?, player_config_json),
+       updated_at = datetime('now')
+     WHERE id = ? AND deleted_at IS NULL`
+  ).bind(name, playerConfig ? JSON.stringify(playerConfig) : null, id).run();
   if (!result.meta.changes) return errorResponse(404, "NOT_FOUND", "Arquivo não encontrado.");
-  await audit(env, user.id, "asset.renamed", "asset", id).run();
+  await audit(
+    env,
+    user.id,
+    playerConfig ? "asset.player_updated" : "asset.renamed",
+    "asset",
+    id
+  ).run();
   return json({ asset: mapAsset((await findAsset(env, id))!) });
+}
+
+async function readVideoMetrics(env: Env, id: string, periodDays: number): Promise<Response> {
+  const days = Math.min(Math.max(Math.trunc(periodDays), 1), 90);
+  const since = `-${days} days`;
+  const asset = await findAsset(env, id);
+  if (!asset || asset.media_type !== "video") {
+    return errorResponse(404, "NOT_FOUND", "Vídeo não encontrado.");
+  }
+  const [eventCounts, uniqueViewers] = await Promise.all([
+    env.DB.prepare(
+      `SELECT event_type, COUNT(*) AS value
+       FROM tracking_events
+       WHERE json_extract(properties_json, '$.assetId') = ?
+         AND occurred_at > datetime('now', ?)
+       GROUP BY event_type`
+    ).bind(id, since).all<{ event_type: string; value: number }>(),
+    env.DB.prepare(
+      `SELECT COUNT(DISTINCT anonymous_id) AS value
+       FROM tracking_events
+       WHERE event_type = 'vsl_start'
+         AND json_extract(properties_json, '$.assetId') = ?
+         AND occurred_at > datetime('now', ?)`
+    ).bind(id, since).first<number>("value")
+  ]);
+  const counts = new Map(
+    eventCounts.results.map((row) => [row.event_type, Number(row.value)])
+  );
+  const starts = counts.get("vsl_start") ?? 0;
+  const completions = counts.get("vsl_complete") ?? 0;
+  const checkpointTypes = ["vsl_start", "vsl_25", "vsl_50", "vsl_75", "vsl_complete"];
+  const retention = [0, 25, 50, 75, 100].map((point, index) => {
+    const viewers = counts.get(checkpointTypes[index]) ?? 0;
+    return {
+      percent: point,
+      viewers,
+      rate: starts > 0 ? Math.round((viewers / starts) * 10_000) / 100 : 0
+    };
+  });
+  const weightedRetention =
+    retention.slice(1).reduce((sum, item) => sum + item.rate, 0) /
+    Math.max(retention.length - 1, 1);
+  const metrics: VideoMetrics = {
+    assetId: id,
+    starts,
+    uniqueViewers: Number(uniqueViewers ?? 0),
+    pauses: counts.get("vsl_pause") ?? 0,
+    completions,
+    checkoutClicks: counts.get("checkout_click") ?? 0,
+    averageRetention: Math.round(weightedRetention * 10) / 10,
+    completionRate: starts > 0 ? Math.round((completions / starts) * 10_000) / 100 : 0,
+    retention,
+    periodDays: days
+  };
+  return json({ metrics });
 }
 
 export async function handleAssetsApi(
@@ -243,9 +397,13 @@ export async function handleAssetsApi(
     if (completeMatch && request.method === "POST") {
       return complete(env, user, completeMatch[1]);
     }
+    const metricsMatch = url.pathname.match(/^\/api\/assets\/([^/]+)\/metrics$/);
+    if (metricsMatch && request.method === "GET") {
+      return readVideoMetrics(env, metricsMatch[1], Number(url.searchParams.get("days") ?? "7"));
+    }
     const assetMatch = url.pathname.match(/^\/api\/assets\/([^/]+)$/);
     if (assetMatch && request.method === "PATCH") {
-      return rename(request, env, user, assetMatch[1]);
+      return updateAsset(request, env, user, assetMatch[1]);
     }
     if (assetMatch && request.method === "DELETE") {
       return abort(env, user, assetMatch[1]);

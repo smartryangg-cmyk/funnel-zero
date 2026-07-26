@@ -14,10 +14,11 @@ export function Domains() {
   const [provider, setProvider] = useState<DomainProviderStatus | null>(null);
   const [domains, setDomains] = useState<DomainSummary[]>([]);
   const [funnels, setFunnels] = useState<FunnelSummary[]>([]);
-  const [accountId, setAccountId] = useState("");
-  const [workerName, setWorkerName] = useState("");
   const [message, setMessage] = useState("");
+  const [connecting, setConnecting] = useState(false);
   const [showAttach, setShowAttach] = useState(false);
+  const [showTokenConnect, setShowTokenConnect] = useState(false);
+  const canImportExternal = provider?.zoneImportReady === true;
 
   async function load() {
     try {
@@ -25,38 +26,68 @@ export function Domains() {
       setProvider(result.provider);
       setDomains(result.domains);
       setFunnels(funnelResult.funnels);
-      setAccountId(result.provider.accountId);
-      setWorkerName(result.provider.workerName);
     } catch (caught) {
       setMessage(caught instanceof Error ? caught.message : "Falha ao carregar domínios.");
     }
   }
-  useEffect(() => { void load(); }, []);
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    if (params.get("cloudflare") === "connected") {
+      setMessage("Cloudflare conectada. Seus domínios já podem ser publicados por aqui.");
+      history.replaceState({}, "", "/domains");
+    } else if (params.get("cloudflare") === "error") {
+      setMessage(params.get("message") ?? "A conexão com a Cloudflare não foi concluída.");
+      history.replaceState({}, "", "/domains");
+    }
+    void load();
+  }, []);
 
-  async function saveProvider(event: FormEvent) {
-    event.preventDefault();
+  async function connectCloudflare() {
+    if (!provider?.oauthAvailable) {
+      setShowTokenConnect(true);
+      return;
+    }
+    setConnecting(true);
     try {
-      await api.saveDomainProvider({ accountId, workerName });
-      setMessage("Dados do provedor salvos. O token continua protegido como secret do Worker.");
+      const result = await api.startCloudflareOAuth();
+      location.assign(result.authorizeUrl);
+    } catch (caught) {
+      setMessage(caught instanceof Error ? caught.message : "Falha ao iniciar a conexão.");
+      setConnecting(false);
+    }
+  }
+  async function disconnectCloudflare() {
+    if (
+      !confirm(
+        "Desconectar a KRANO da Cloudflare? Os domínios publicados continuarão no ar, mas não poderão ser alterados aqui."
+      )
+    ) {
+      return;
+    }
+    try {
+      const result = await api.disconnectCloudflare();
+      setMessage(result.warning ?? "Cloudflare desconectada com segurança.");
       await load();
     } catch (caught) {
-      setMessage(caught instanceof Error ? caught.message : "Falha ao salvar.");
+      setMessage(caught instanceof Error ? caught.message : "Falha ao desconectar.");
     }
   }
   async function sync() {
     try {
       const result = await api.syncDomains();
-      setMessage(`${result.remoteCount} domínio(s) encontrado(s) na Cloudflare.`);
+      setMessage(
+        `${result.activeCount} domínio(s) ativo(s)` +
+        (result.validatingCount ? ` e ${result.validatingCount} preparando SSL.` : ".")
+      );
       await load();
     } catch (caught) {
       setMessage(caught instanceof Error ? caught.message : "Falha ao sincronizar.");
     }
   }
   async function remove(domain: DomainSummary) {
-    const confirmation = prompt(`Para remover o roteamento, digite exatamente:\n${domain.hostname}`);
-    if (confirmation !== domain.hostname) return;
+    if (!confirm(`Remover ${domain.hostname} da KRANO?`)) return;
     try {
-      await api.detachDomain(domain.id, confirmation);
+      await api.detachDomain(domain.id, domain.hostname);
       setMessage("Domínio removido do Worker.");
       await load();
     } catch (caught) {
@@ -66,54 +97,214 @@ export function Domains() {
 
   return (
     <>
-      <PageHeader eyebrow="Domínios" title="Roteamento com confirmação explícita." subtitle="O endereço workers.dev já funciona como domínio de teste. Domínios próprios só mudam após confirmação." actions={<><button className="button secondary" onClick={() => void sync()} disabled={!provider?.tokenAvailable}>Sincronizar</button><button className="button primary" onClick={() => setShowAttach(true)} disabled={!provider?.tokenAvailable}>+ Conectar domínio</button></>} />
-      {message && <Notice tone={message.includes("salv") || message.includes("encontrado") || message.includes("removido") ? "success" : "warning"}>{message}</Notice>}
+      <PageHeader eyebrow="Integrações / Cloudflare / Domínios" title="Seus endereços, dentro da KRANO." subtitle="Domínios da Cloudflare são automáticos. Domínios comprados fora entram por um guia simples e ficam gerenciados aqui." actions={<><button className="button secondary" onClick={() => void sync()} disabled={!provider?.ready}>Verificar tudo</button><button className="button primary" onClick={() => setShowAttach(true)} disabled={!provider?.ready}>+ Adicionar domínio</button></>} />
+      {message && <Notice tone={message.includes("não") || message.includes("Falha") || message.includes("erro") ? "warning" : "success"}>{message}</Notice>}
       <section className="settings-grid">
-        <article className="panel">
-          <div className="panel-header"><div><span className="eyebrow">PROVEDOR OPCIONAL</span><h2>Cloudflare Domains API</h2></div><StatusPill status={provider?.tokenAvailable ? "active" : "pending"} /></div>
-          <form className="form" onSubmit={(event) => void saveProvider(event)}>
-            <label className="field"><span>Account ID</span><input required value={accountId} onChange={(event) => setAccountId(event.target.value)} placeholder="32 caracteres" /></label>
-            <label className="field"><span>Nome do Worker</span><input required value={workerName} onChange={(event) => setWorkerName(event.target.value)} placeholder="funnel-zero-development" /></label>
-            <button className="button secondary">Salvar provedor</button>
-          </form>
-          <div className="safe-callout"><strong>Token nunca entra no banco.</strong><p>Configure localmente: <code>npx wrangler secret put CLOUDFLARE_API_TOKEN</code>. Permissão mínima: Workers Scripts Write; Zone Read apenas para listar zonas.</p></div>
+        <article className={`panel cloudflare-connect-card ${provider?.connected ? "connected" : ""}`}>
+          <div className="panel-header"><div className="provider-title"><span className="cloudflare-mark">C</span><div><span className="eyebrow">INFRAESTRUTURA</span><h2>Cloudflare</h2></div></div><StatusPill status={provider?.connected ? "active" : "pending"} /></div>
+          {provider?.connected ? (
+            <>
+              <div className="connection-summary"><strong>Conta conectada</strong><span>{provider.accountName || "Conta Cloudflare autorizada"}</span><small>{!canImportExternal ? "Atualize a permissão uma vez para importar domínios externos" : provider.ready ? "Pronta para publicar domínios" : "Finalizando a conexão segura…"}</small></div>
+              <div className="permission-chips"><span>Ver domínios</span><span>Importar domínio externo</span><span>Publicar rotas</span><span>SSL automático</span></div>
+              {!canImportExternal && <button className="button primary full" onClick={() => void connectCloudflare()} disabled={connecting}>{connecting ? "Abrindo Cloudflare…" : "Atualizar permissão de domínios"}</button>}
+              {provider.guidedTokenAvailable && <button className="button ghost" onClick={() => setShowTokenConnect(true)}>Trocar autorização</button>}
+              <button className="button secondary" onClick={() => void disconnectCloudflare()}>Desconectar</button>
+            </>
+          ) : (
+            <>
+              <h3>Conecte uma vez. O resto é automático.</h3>
+              <p className="provider-copy">Você será levado à Cloudflare para escolher a conta e revisar as permissões. A KRANO nunca pede sua senha.</p>
+              <ul className="permission-list"><li><span>✓</span>Encontrar os domínios da conta</li><li><span>✓</span>Publicar somente os endereços escolhidos</li><li><span>✓</span>Manter a conexão segura e revogável</li></ul>
+              <button className="button primary cloudflare-button" onClick={() => void connectCloudflare()} disabled={connecting || (!provider?.oauthAvailable && !provider?.guidedTokenAvailable)}>{connecting ? "Abrindo Cloudflare…" : "Conectar KRANO à Cloudflare"}</button>
+              {!provider?.oauthAvailable && provider?.guidedTokenAvailable && <small className="connection-help">A Cloudflare abrirá com as permissões necessárias já preenchidas.</small>}
+              {!provider?.oauthAvailable && !provider?.guidedTokenAvailable && <small className="connection-help">Execute novamente o instalador desta versão para habilitar a conexão guiada.</small>}
+            </>
+          )}
         </article>
         <article className="panel">
-          <span className="eyebrow">DOMÍNIO DE TESTE ATUAL</span>
-          <h2>workers.dev</h2>
-          <p>A instalação publicada já está acessível sem custo e sem alterar DNS. Use-o enquanto valida a oferta.</p>
-          <a className="button secondary" href={location.origin} target="_blank" rel="noreferrer">{location.host} ↗</a>
+          <span className="eyebrow">ENDEREÇO GRATUITO ATIVO</span>
+          <h2>Seu domínio de teste já funciona</h2>
+          <p>Use este endereço agora mesmo enquanto decide qual domínio próprio publicar. Nada fica bloqueado.</p>
+          <div className="test-domain"><span className="live-dot" />{location.host}</div>
+          <a className="button secondary" href={location.origin} target="_blank" rel="noreferrer">Abrir endereço ↗</a>
         </article>
       </section>
       <section className="panel">
-        <div className="panel-header"><div><span className="eyebrow">DOMÍNIOS PRÓPRIOS</span><h2>Conectados</h2></div></div>
-        {!domains.length ? <Empty icon="◇" title="Nenhum domínio próprio conectado" text="Isso não impede o funcionamento: o domínio de teste workers.dev continua ativo." /> : <div className="table-list">{domains.map((domain) => <div key={domain.id}><div><strong>{domain.hostname}</strong><small>{domain.funnelName ?? "Sem funil associado"}</small></div><StatusPill status={domain.status} /><button className="danger-text" onClick={() => void remove(domain)}>Remover</button></div>)}</div>}
+        <div className="panel-header"><div><span className="eyebrow">DOMÍNIOS PRÓPRIOS</span><h2>Publicados pela KRANO</h2></div></div>
+        {!domains.length ? <Empty icon="◇" title="Nenhum domínio próprio publicado" text={provider?.ready ? "Clique em “Publicar domínio”. Você só escolhe o endereço e o funil; a Cloudflare cuida do restante." : "Conecte a Cloudflare acima. Enquanto isso, o endereço gratuito continua funcionando."} /> : <div className="table-list">{domains.map((domain) => <div key={domain.id}><div><a className="domain-link" href={`https://${domain.hostname}`} target="_blank" rel="noreferrer">{domain.hostname} ↗</a><small>{domain.funnelName ?? "Todos os funis"} · {domain.certIssued === false ? "SSL preparando" : "SSL ativo"}</small></div><StatusPill status={domain.status} /><button className="danger-text" onClick={() => void remove(domain)}>Remover</button></div>)}</div>}
       </section>
-      {showAttach && <AttachDomain funnels={funnels} onClose={() => setShowAttach(false)} onSaved={async () => { setShowAttach(false); await load(); }} />}
+      {showAttach && <AttachDomain funnels={funnels} canImportExternal={canImportExternal} onAuthorize={connectCloudflare} onClose={() => setShowAttach(false)} onSaved={async () => { setShowAttach(false); await load(); }} />}
+      {showTokenConnect && provider?.tokenTemplateUrl && (
+        <ConnectCloudflareToken
+          templateUrl={provider.tokenTemplateUrl}
+          onClose={() => setShowTokenConnect(false)}
+          onConnected={async (accountName) => {
+            setShowTokenConnect(false);
+            setMessage(`Cloudflare conectada com segurança: ${accountName}.`);
+            await load();
+          }}
+        />
+      )}
     </>
   );
 }
 
-function AttachDomain({ funnels, onClose, onSaved }: { funnels: FunnelSummary[]; onClose: () => void; onSaved: () => Promise<void> }) {
-  const [zones, setZones] = useState<Array<{ id: string; name: string; status: string }>>([]);
-  const [hostname, setHostname] = useState("");
-  const [zoneId, setZoneId] = useState("");
-  const [funnelId, setFunnelId] = useState("");
-  const [confirmation, setConfirmation] = useState("");
+function ConnectCloudflareToken({
+  templateUrl,
+  onClose,
+  onConnected
+}: {
+  templateUrl: string;
+  onClose: () => void;
+  onConnected: (accountName: string) => Promise<void>;
+}) {
+  const [apiToken, setApiToken] = useState("");
+  const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  useEffect(() => { api.domainZones().then((result) => { setZones(result.zones); setZoneId(result.zones[0]?.id ?? ""); }).catch((caught: Error) => setError(caught.message)); }, []);
+
+  async function connect(event: FormEvent) {
+    event.preventDefault();
+    setSaving(true);
+    setError("");
+    try {
+      const result = await api.connectCloudflareToken(apiToken);
+      setApiToken("");
+      await onConnected(result.provider.accountName);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "A Cloudflare recusou a autorização.");
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="modal-backdrop" onMouseDown={onClose}>
+      <section className="modal cloudflare-token-modal" onMouseDown={(event) => event.stopPropagation()}>
+        <header><div><span className="eyebrow">CONEXÃO GUIADA</span><h2>Autorize a KRANO</h2></div><button onClick={onClose}>×</button></header>
+        <ol className="guided-connection-steps">
+          <li><span>1</span><div><strong>Abra a tela oficial</strong><p>As permissões mínimas já estarão selecionadas para esta instalação.</p></div></li>
+          <li><span>2</span><div><strong>Crie e copie o token</strong><p>A Cloudflare mostra o código uma única vez.</p></div></li>
+          <li><span>3</span><div><strong>Cole abaixo</strong><p>O código será validado e guardado somente como secret do Worker.</p></div></li>
+        </ol>
+        <a className="button primary full" href={templateUrl} target="_blank" rel="noreferrer">Abrir autorização na Cloudflare ↗</a>
+        <form className="form token-connect-form" onSubmit={(event) => void connect(event)}>
+          <label className="field"><span>Token gerado pela Cloudflare</span><input type="password" autoComplete="off" required value={apiToken} onChange={(event) => setApiToken(event.target.value.trim())} placeholder="cfut_..." /></label>
+          {error && <p className="form-error">{error}</p>}
+          <div className="form-actions"><button type="button" className="button ghost" onClick={onClose}>Cancelar</button><button className="button secondary" disabled={!apiToken || saving}>{saving ? "Validando…" : "Concluir conexão"}</button></div>
+        </form>
+      </section>
+    </div>
+  );
+}
+
+function AttachDomain({
+  funnels,
+  canImportExternal,
+  onAuthorize,
+  onClose,
+  onSaved
+}: {
+  funnels: FunnelSummary[];
+  canImportExternal: boolean;
+  onAuthorize: () => Promise<void>;
+  onClose: () => void;
+  onSaved: () => Promise<void>;
+}) {
+  const [zones, setZones] = useState<Array<{ id: string; name: string; status: string; nameServers: string[] }>>([]);
+  const [mode, setMode] = useState<"existing" | "external">("existing");
+  const [zoneId, setZoneId] = useState("");
+  const [subdomain, setSubdomain] = useState("oferta");
+  const [externalDomain, setExternalDomain] = useState("");
+  const [imported, setImported] = useState<{ name: string; status: string; nameServers: string[] } | null>(null);
+  const [funnelId, setFunnelId] = useState("");
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
+  const publishedFunnels = funnels.filter((funnel) => funnel.status === "published");
+
+  async function loadZones() {
+    const result = await api.domainZones();
+    setZones(result.zones);
+    const activeZones = result.zones.filter((zone) => zone.status === "active");
+    setZoneId((current) => current || activeZones[0]?.id || "");
+  }
+  useEffect(() => { void loadZones().catch((caught: Error) => setError(caught.message)); }, []);
+
+  const activeZones = zones.filter((item) => item.status === "active");
+  const zone = activeZones.find((item) => item.id === zoneId);
+  const hostname = zone ? `${subdomain ? `${subdomain}.` : ""}${zone.name}` : "";
+
   async function submit(event: FormEvent) {
     event.preventDefault();
-    const zone = zones.find((item) => item.id === zoneId);
-    if (!zone) return;
+    if (!zone || !hostname) return;
+    setSaving(true);
+    setError("");
     try {
-      await api.attachDomain({ hostname, confirmation, zoneId, zoneName: zone.name, funnelId: funnelId || null, isPrimary: true });
+      await api.attachDomain({ hostname, funnelId, isPrimary: true });
       await onSaved();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Falha ao conectar.");
+      setSaving(false);
     }
   }
-  return <div className="modal-backdrop" onMouseDown={onClose}><section className="modal" onMouseDown={(event) => event.stopPropagation()}><header><h2>Conectar domínio</h2><button onClick={onClose}>×</button></header><Notice>Esta ação altera o roteamento real na sua conta Cloudflare.</Notice><form className="form" onSubmit={(event) => void submit(event)}><label className="field"><span>Domínio ou subdomínio</span><input required value={hostname} onChange={(event) => setHostname(event.target.value.toLowerCase())} placeholder="oferta.seudominio.com" /></label><label className="field"><span>Zona</span><select required value={zoneId} onChange={(event) => setZoneId(event.target.value)}>{zones.map((zone) => <option key={zone.id} value={zone.id}>{zone.name} · {zone.status}</option>)}</select></label><label className="field"><span>Funil</span><select value={funnelId} onChange={(event) => setFunnelId(event.target.value)}><option value="">Sem associação</option>{funnels.map((funnel) => <option key={funnel.id} value={funnel.id}>{funnel.name}</option>)}</select></label><label className="field"><span>Confirme digitando o domínio</span><input required value={confirmation} onChange={(event) => setConfirmation(event.target.value)} /></label>{error && <p className="form-error">{error}</p>}<div className="form-actions"><button type="button" className="button ghost" onClick={onClose}>Cancelar</button><button className="button primary" disabled={!hostname || confirmation !== hostname}>Conectar e alterar rota</button></div></form></section></div>;
+  async function importDomain() {
+    setSaving(true);
+    setError("");
+    try {
+      const result = await api.importDomain(externalDomain);
+      setImported(result.zone);
+      await loadZones();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Falha ao importar o domínio.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="modal-backdrop" onMouseDown={onClose}>
+      <section className="modal domain-wizard" onMouseDown={(event) => event.stopPropagation()}>
+        <header><div><span className="eyebrow">PUBLICAÇÃO GUIADA</span><h2>Qual endereço você quer usar?</h2></div><button onClick={onClose}>×</button></header>
+        <div className="tracking-tabs domain-tabs">
+          <button className={mode === "existing" ? "active" : ""} onClick={() => setMode("existing")}>Já está na Cloudflare</button>
+          <button className={mode === "external" ? "active" : ""} onClick={() => setMode("external")}>Comprei em outro lugar</button>
+        </div>
+        {mode === "existing" ? (
+          <form className="form" onSubmit={(event) => void submit(event)}>
+            <div className="domain-composer">
+              <label className="field"><span>Nome do endereço</span><input value={subdomain} onChange={(event) => setSubdomain(event.target.value.toLowerCase().replace(/[^a-z0-9-]/g, "").replace(/^-+/, ""))} placeholder="oferta" /></label>
+              <span className="domain-dot">.</span>
+              <label className="field"><span>Seu domínio</span><select required value={zoneId} onChange={(event) => setZoneId(event.target.value)}>{activeZones.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+            </div>
+            <div className="domain-preview"><small>O endereço ficará assim</small><strong>https://{hostname || "escolha um domínio ativo"}</strong></div>
+            <label className="field"><span>Qual funil deve abrir?</span><select required value={funnelId} onChange={(event) => setFunnelId(event.target.value)}><option value="">Escolha um funil publicado</option>{publishedFunnels.map((funnel) => <option key={funnel.id} value={funnel.id}>{funnel.name}</option>)}</select></label>
+            <div className="automatic-steps"><span>✓ DNS automático</span><span>✓ SSL automático</span><span>✓ Sem novo deploy</span></div>
+            {!activeZones.length && !error && <p className="form-help">Nenhum domínio ativo encontrado. Use a aba “Comprei em outro lugar”.</p>}
+            {error && <p className="form-error">{error}</p>}
+            <Notice>A rota e o certificado são criados sem abrir o painel Cloudflare.</Notice>
+            {!publishedFunnels.length && <Notice><strong>Publique o funil primeiro</strong><p>O domínio só é ativado depois que existe pelo menos uma página realmente publicada.</p></Notice>}
+            <div className="form-actions"><button type="button" className="button ghost" onClick={onClose}>Cancelar</button><button className="button primary" disabled={!hostname || !funnelId || saving}>{saving ? "Publicando…" : "Publicar neste endereço"}</button></div>
+          </form>
+        ) : (
+          <div className="form external-domain-flow">
+            <label className="field"><span>Domínio comprado na Hostinger ou outro registrador</span><input value={externalDomain} onChange={(event) => setExternalDomain(event.target.value.toLowerCase().trim())} placeholder="seudominio.com.br" /></label>
+            {!canImportExternal && <Notice><strong>Atualização de permissão necessária</strong><p>A Cloudflare mostrará a tela oficial para autorizar a importação de domínios. Isso acontece uma única vez.</p><button className="button primary full" onClick={() => void onAuthorize()}>Atualizar permissão</button></Notice>}
+            {!imported ? (
+              <button className="button primary full" disabled={!canImportExternal || !externalDomain || saving} onClick={() => void importDomain()}>{saving ? "Preparando…" : "Preparar domínio na KRANO"}</button>
+            ) : (
+              <div className="nameserver-guide">
+                <span className="eyebrow">ÚNICO PASSO NO REGISTRADOR</span>
+                <h3>Troque os servidores DNS de {imported.name}</h3>
+                <p>A compra continua no provedor atual. Copie estes dois endereços na área “Servidores DNS” ou “Nameservers”.</p>
+                {imported.nameServers.map((server) => <code key={server} onClick={() => void navigator.clipboard.writeText(server)}>{server}<span>copiar</span></code>)}
+                <small>Depois da ativação, volte aqui, clique em “Verificar tudo” e publique o subdomínio. Essa troca não pode ser feita sem autorização do registrador.</small>
+              </div>
+            )}
+            {error && <p className="form-error">{error}</p>}
+            <div className="form-actions"><button type="button" className="button ghost" onClick={onClose}>Fechar</button>{imported && <button className="button secondary" onClick={() => { setMode("existing"); setImported(null); }}>Já alterei o DNS</button>}</div>
+          </div>
+        )}
+      </section>
+    </div>
+  );
 }
 
 export function Settings() {

@@ -3,6 +3,7 @@ import type {
   PageDocument,
   SessionUser
 } from "../../../packages/shared/src/schemas";
+import { isPublicRouteReady } from "../../../packages/shared/src/schemas";
 import { randomId } from "./crypto";
 import { errorResponse, json, readJson, requireSameOrigin } from "./http";
 import {
@@ -49,12 +50,15 @@ interface PageRow {
   offer_id: string | null;
   offer_name: string | null;
   offer_slug: string | null;
+  offer_status: "draft" | "active" | "archived" | null;
+  funnel_status: "draft" | "published" | "archived" | null;
   name: string;
   slug: string;
   page_type: string;
   status: "draft" | "published" | "archived";
   revision: number | null;
   content_json: string | null;
+  published_version_id: string | null;
   published_at: string | null;
   updated_at: string;
 }
@@ -77,7 +81,7 @@ interface VersionRow {
 
 const DEFAULT_DOCUMENT: PageDocument = {
   version: 1,
-  theme: { background: "#070b16", text: "#f5f7fb", accent: "#8b5cf6" },
+  theme: { background: "#000000", text: "#f5f7fb", accent: "#f00000" },
   blocks: [
     { id: "headline", type: "heading", content: "Uma página pronta para a sua ideia" },
     {
@@ -124,6 +128,25 @@ function mapFunnel(row: FunnelRow) {
 
 function mapPage(row: PageRow, origin: string) {
   const content = safeJson<PageDocument>(row.content_json, DEFAULT_DOCUMENT);
+  const isLive = isPublicRouteReady({
+    pageStatus: row.status,
+    publishedVersionId: row.published_version_id,
+    offerId: row.offer_id,
+    offerStatus: row.offer_status,
+    funnelId: row.funnel_id,
+    funnelStatus: row.funnel_status
+  });
+  const publicationIssue = isLive
+    ? null
+    : row.status !== "published"
+      ? "Publique uma versão para gerar a URL."
+      : !row.offer_id
+        ? "Vincule esta página a uma oferta antes de publicar."
+        : row.offer_status !== "active"
+          ? "A oferta precisa estar ativa."
+          : row.funnel_id && row.funnel_status !== "published"
+            ? "O funil vinculado precisa estar publicado."
+            : "A versão publicada ainda não está disponível.";
   return {
     id: row.id,
     funnelId: row.funnel_id,
@@ -137,10 +160,11 @@ function mapPage(row: PageRow, origin: string) {
     content,
     publishedAt: row.published_at,
     updatedAt: row.updated_at,
-    publicUrl:
-      row.status === "published" && row.offer_id
-        ? `${origin}/o/${row.offer_slug ?? slugify(row.offer_name ?? "oferta")}/${row.slug}`
-        : null
+    publicUrl: isLive
+      ? `${origin}/o/${row.offer_slug ?? slugify(row.offer_name ?? "oferta")}/${row.slug}`
+      : null,
+    isLive,
+    publicationIssue
   };
 }
 
@@ -198,8 +222,13 @@ function validateDocument(value: unknown): PageDocument {
     theme: {
       background: optionalString(theme.background, 20) ?? "#070b16",
       text: optionalString(theme.text, 20) ?? "#f5f7fb",
-      accent: optionalString(theme.accent, 20) ?? "#8b5cf6",
-      font: optionalString(theme.font, 80) ?? undefined
+      accent: optionalString(theme.accent, 20) ?? "#f00000",
+      font: optionalString(theme.font, 80) ?? undefined,
+      maxWidth: Math.min(Math.max(Number(theme.maxWidth) || 920, 320), 1440),
+      contentAlign: ["left", "center", "right"].includes(String(theme.contentAlign))
+        ? theme.contentAlign as "left" | "center" | "right"
+        : "center",
+      buttonRadius: Math.min(Math.max(Number(theme.buttonRadius) || 14, 0), 999)
     },
     blocks: blocks.map((item) => {
       const block = parseBodyRecord(item);
@@ -261,9 +290,11 @@ async function listFunnels(env: Env, offerId: string | null): Promise<FunnelRow[
 async function listPages(env: Env, offerId: string | null): Promise<PageRow[]> {
   const where = offerId ? "WHERE p.offer_id = ?" : "";
   const statement = env.DB.prepare(
-    `SELECT p.*, o.name AS offer_name, o.slug AS offer_slug, d.revision, d.content_json
+    `SELECT p.*, o.name AS offer_name, o.slug AS offer_slug, o.status AS offer_status,
+       f.status AS funnel_status, d.revision, d.content_json
      FROM pages p
      LEFT JOIN offers o ON o.id = p.offer_id
+     LEFT JOIN funnels f ON f.id = p.funnel_id
      LEFT JOIN page_drafts d ON d.page_id = p.id
      ${where} ORDER BY p.updated_at DESC`
   );
@@ -317,6 +348,37 @@ async function updateOffer(
   ]);
   const row = (await listOffers(env)).find((item) => item.id === id)!;
   return json({ offer: mapOffer(row) });
+}
+
+async function deleteOffer(env: Env, user: SessionUser, id: string): Promise<Response> {
+  const current = await env.DB.prepare(
+    `SELECT o.*,
+      (SELECT COUNT(*) FROM funnels f WHERE f.offer_id = o.id) AS funnel_count,
+      (SELECT COUNT(*) FROM pages p WHERE p.offer_id = o.id) AS page_count
+     FROM offers o WHERE o.id = ?`
+  ).bind(id).first<OfferRow>();
+  if (!current) return errorResponse(404, "NOT_FOUND", "Oferta não encontrada.");
+  await env.DB.batch([
+    env.DB.prepare(
+      `UPDATE pages SET offer_id = NULL, status = 'draft', published_version_id = NULL,
+       published_at = NULL, updated_at = datetime('now') WHERE offer_id = ?`
+    ).bind(id),
+    env.DB.prepare(
+      `UPDATE funnels SET offer_id = NULL, status = 'draft', published_at = NULL,
+       updated_at = datetime('now') WHERE offer_id = ?`
+    ).bind(id),
+    env.DB.prepare("DELETE FROM offers WHERE id = ?").bind(id),
+    audit(env, user.id, "offer.deleted", "offer", id, {
+      name: current.name,
+      detachedFunnels: Number(current.funnel_count),
+      detachedPages: Number(current.page_count)
+    })
+  ]);
+  return json({
+    ok: true,
+    detachedFunnels: Number(current.funnel_count),
+    detachedPages: Number(current.page_count)
+  });
 }
 
 async function createFunnel(request: Request, env: Env, user: SessionUser): Promise<Response> {
@@ -413,13 +475,55 @@ async function updateFunnel(
 }
 
 async function publishFunnel(env: Env, user: SessionUser, id: string): Promise<Response> {
-  const result = await env.DB.prepare(
-    `UPDATE funnels SET status = 'published', published_at = datetime('now'),
-     updated_at = datetime('now') WHERE id = ?`
-  ).bind(id).run();
-  if (!result.meta.changes) return errorResponse(404, "NOT_FOUND", "Funil não encontrado.");
-  await audit(env, user.id, "funnel.published", "funnel", id).run();
+  const current = await env.DB.prepare("SELECT id, offer_id FROM funnels WHERE id = ?")
+    .bind(id)
+    .first<{ id: string; offer_id: string | null }>();
+  if (!current) return errorResponse(404, "NOT_FOUND", "Funil não encontrado.");
+  const statements: D1PreparedStatement[] = [
+    env.DB.prepare(
+      `UPDATE funnels SET status = 'published', published_at = datetime('now'),
+       updated_at = datetime('now') WHERE id = ?`
+    ).bind(id)
+  ];
+  if (current.offer_id) {
+    statements.push(
+      env.DB.prepare(
+        "UPDATE offers SET status = 'active', updated_at = datetime('now') WHERE id = ?"
+      ).bind(current.offer_id)
+    );
+  }
+  statements.push(audit(env, user.id, "funnel.published", "funnel", id));
+  await env.DB.batch(statements);
   return json({ ok: true });
+}
+
+async function deleteFunnel(env: Env, user: SessionUser, id: string): Promise<Response> {
+  const current = await env.DB.prepare(
+    `SELECT f.*,
+      (SELECT COUNT(*) FROM pages p WHERE p.funnel_id = f.id) AS page_count,
+      (SELECT COUNT(*) FROM domains d WHERE d.funnel_id = f.id) AS domain_count
+     FROM funnels f WHERE f.id = ?`
+  ).bind(id).first<FunnelRow & { page_count: number; domain_count: number }>();
+  if (!current) return errorResponse(404, "NOT_FOUND", "Funil não encontrado.");
+  if (Number(current.domain_count) > 0) {
+    return errorResponse(
+      409,
+      "FUNNEL_HAS_DOMAINS",
+      "Remova ou transfira os domínios vinculados antes de excluir este funil.",
+      { domainCount: Number(current.domain_count) }
+    );
+  }
+  await env.DB.batch([
+    env.DB.prepare(
+      "UPDATE pages SET funnel_id = NULL, updated_at = datetime('now') WHERE funnel_id = ?"
+    ).bind(id),
+    env.DB.prepare("DELETE FROM funnels WHERE id = ?").bind(id),
+    audit(env, user.id, "funnel.deleted", "funnel", id, {
+      name: current.name,
+      preservedPages: Number(current.page_count)
+    })
+  ]);
+  return json({ ok: true, preservedPages: Number(current.page_count) });
 }
 
 async function duplicateFunnel(env: Env, user: SessionUser, id: string): Promise<Response> {
@@ -557,17 +661,27 @@ async function publishPage(
   origin: string
 ): Promise<Response> {
   const current = await env.DB.prepare(
-    `SELECT p.*, o.name AS offer_name, o.slug AS offer_slug, d.revision, d.content_json FROM pages p
-     LEFT JOIN offers o ON o.id = p.offer_id LEFT JOIN page_drafts d ON d.page_id = p.id
+    `SELECT p.*, o.name AS offer_name, o.slug AS offer_slug, o.status AS offer_status,
+       f.status AS funnel_status, d.revision, d.content_json FROM pages p
+     LEFT JOIN offers o ON o.id = p.offer_id
+     LEFT JOIN funnels f ON f.id = p.funnel_id
+     LEFT JOIN page_drafts d ON d.page_id = p.id
      WHERE p.id = ?`
   ).bind(id).first<PageRow>();
   if (!current?.content_json) return errorResponse(404, "NOT_FOUND", "Página não encontrada.");
+  if (!current.offer_id || !current.offer_slug) {
+    return errorResponse(
+      409,
+      "PAGE_WITHOUT_OFFER",
+      "Vincule a página a uma oferta antes de publicar."
+    );
+  }
   const nextVersion =
     (await env.DB.prepare(
       "SELECT COALESCE(MAX(version_number), 0) + 1 AS value FROM page_versions WHERE page_id = ?"
     ).bind(id).first<number>("value")) ?? 1;
   const versionId = randomId();
-  await env.DB.batch([
+  const statements: D1PreparedStatement[] = [
     env.DB.prepare(
       `INSERT INTO page_versions(id, page_id, version_number, content_json, created_by)
        VALUES (?, ?, ?, ?, ?)`
@@ -576,10 +690,56 @@ async function publishPage(
       `UPDATE pages SET status = 'published', published_version_id = ?, published_at = datetime('now'),
        updated_at = datetime('now') WHERE id = ?`
     ).bind(versionId, id),
-    audit(env, user.id, "page.published", "page", id, { version: nextVersion })
-  ]);
+    env.DB.prepare(
+      "UPDATE offers SET status = 'active', updated_at = datetime('now') WHERE id = ?"
+    ).bind(current.offer_id)
+  ];
+  if (current.funnel_id) {
+    statements.push(
+      env.DB.prepare(
+        `UPDATE funnels SET status = 'published', published_at = COALESCE(published_at, datetime('now')),
+         updated_at = datetime('now') WHERE id = ?`
+      ).bind(current.funnel_id)
+    );
+  }
+  statements.push(audit(env, user.id, "page.published", "page", id, {
+    version: nextVersion,
+    activatedOffer: current.offer_status !== "active",
+    publishedFunnel: Boolean(current.funnel_id && current.funnel_status !== "published")
+  }));
+  await env.DB.batch(statements);
   const row = (await listPages(env, null)).find((item) => item.id === id)!;
-  return json({ page: mapPage(row, origin), versionNumber: nextVersion });
+  const page = mapPage(row, origin);
+  if (!page.isLive || !page.publicUrl) {
+    return errorResponse(
+      500,
+      "PUBLICATION_NOT_LIVE",
+      "A versão foi salva, mas a rota pública não ficou disponível. Tente publicar novamente."
+    );
+  }
+  return json({
+    page,
+    versionNumber: nextVersion,
+    live: true,
+    publicUrl: page.publicUrl,
+    activatedOffer: current.offer_status !== "active",
+    publishedFunnel: Boolean(current.funnel_id && current.funnel_status !== "published")
+  });
+}
+
+async function deletePage(env: Env, user: SessionUser, id: string): Promise<Response> {
+  const current = await env.DB.prepare("SELECT id, name, status FROM pages WHERE id = ?")
+    .bind(id)
+    .first<{ id: string; name: string; status: string }>();
+  if (!current) return errorResponse(404, "NOT_FOUND", "Página não encontrada.");
+  await env.DB.batch([
+    env.DB.prepare("DELETE FROM pages WHERE id = ?").bind(id),
+    audit(env, user.id, "page.deleted", "page", id, {
+      name: current.name,
+      wasPublished: current.status === "published"
+    })
+  ]);
+  return json({ ok: true });
 }
 
 async function restoreVersion(
@@ -621,6 +781,7 @@ export async function handleCatalogApi(
     }
     const offerMatch = url.pathname.match(/^\/api\/offers\/([^/]+)$/);
     if (offerMatch && request.method === "PATCH") return updateOffer(request, env, user, offerMatch[1]);
+    if (offerMatch && request.method === "DELETE") return deleteOffer(env, user, offerMatch[1]);
 
     if (url.pathname === "/api/funnels") {
       if (request.method === "GET") {
@@ -637,6 +798,9 @@ export async function handleCatalogApi(
     }
     if (funnelMatch && request.method === "PATCH") {
       return updateFunnel(request, env, user, funnelMatch[1]);
+    }
+    if (funnelMatch && request.method === "DELETE") {
+      return deleteFunnel(env, user, funnelMatch[1]);
     }
     const publishFunnelMatch = url.pathname.match(/^\/api\/funnels\/([^/]+)\/publish$/);
     if (publishFunnelMatch && request.method === "POST") {
@@ -666,6 +830,9 @@ export async function handleCatalogApi(
     }
     if (pageMatch && request.method === "PATCH") {
       return updatePage(request, env, user, pageMatch[1], url.origin);
+    }
+    if (pageMatch && request.method === "DELETE") {
+      return deletePage(env, user, pageMatch[1]);
     }
     const pagePublishMatch = url.pathname.match(/^\/api\/pages\/([^/]+)\/publish$/);
     if (pagePublishMatch && request.method === "POST") {

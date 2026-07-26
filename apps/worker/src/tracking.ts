@@ -1,5 +1,6 @@
 import { hmac, randomId } from "./crypto";
 import { errorResponse, json, readJson } from "./http";
+import { forwardMetaEvents, type MetaForwardEvent } from "./meta";
 import { optionalString, parseBodyRecord, ValidationError } from "./platform";
 
 const EVENT_TYPES = new Set([
@@ -14,6 +15,9 @@ const EVENT_TYPES = new Set([
   "vsl_complete",
   "checkout_click",
   "lead_submit",
+  "quiz_start",
+  "quiz_answer",
+  "quiz_complete",
   "purchase"
 ]);
 
@@ -32,6 +36,9 @@ interface PublicEvent {
   utm: Record<string, unknown>;
   properties: Record<string, unknown>;
   dedupeKey: string;
+  eventSourceUrl: string;
+  clientIp: string;
+  userAgent: string;
 }
 
 function parseEvent(value: unknown, request: Request): PublicEvent {
@@ -61,12 +68,16 @@ function parseEvent(value: unknown, request: Request): PublicEvent {
       .filter(([, item]) => ["string", "number", "boolean"].includes(typeof item))
       .map(([key, item]) => [key.slice(0, 60), typeof item === "string" ? item.slice(0, 500) : item])
   );
-  const id = optionalString(event.id, 100) ?? randomId();
+  const requestedId = optionalString(event.id, 100);
+  const id =
+    requestedId && /^[a-zA-Z0-9_-]{8,100}$/.test(requestedId)
+      ? requestedId
+      : randomId();
   const requestOrigin = new URL(request.url).origin;
   const origin = request.headers.get("Origin");
   if (origin && origin !== requestOrigin) throw new ValidationError("Origem inválida.");
   return {
-    id: randomId(),
+    id,
     occurredAt: occurredDate.toISOString(),
     type,
     anonymousId,
@@ -82,7 +93,10 @@ function parseEvent(value: unknown, request: Request): PublicEvent {
         ? event.utm as Record<string, unknown>
         : {},
     properties: cleanProperties,
-    dedupeKey: `${anonymousId ?? "anon"}:${id}`.slice(0, 220)
+    dedupeKey: `${anonymousId ?? "anon"}:${id}`.slice(0, 220),
+    eventSourceUrl: request.headers.get("Referer") ?? requestOrigin,
+    clientIp: request.headers.get("CF-Connecting-IP") ?? "0.0.0.0",
+    userAgent: request.headers.get("User-Agent") ?? "unknown"
   };
 }
 
@@ -145,7 +159,21 @@ async function handleEvents(
     throw new ValidationError("Envie entre 1 e 30 eventos por lote.");
   }
   const events = rawEvents.map((item) => parseEvent(item, request));
-  ctx.waitUntil(recordEvents(env, events));
+  ctx.waitUntil((async () => {
+    await recordEvents(env, events);
+    const metaEvents: MetaForwardEvent[] = events.map((event) => ({
+      id: event.id,
+      type: event.type,
+      occurredAt: event.occurredAt,
+      anonymousId: event.anonymousId,
+      offerId: event.offerId,
+      eventSourceUrl: event.eventSourceUrl,
+      clientIp: event.clientIp,
+      userAgent: event.userAgent,
+      properties: event.properties
+    }));
+    await forwardMetaEvents(env, metaEvents);
+  })());
   return json({ accepted: events.length }, { status: 202 });
 }
 
@@ -157,16 +185,38 @@ async function handleLead(request: Request, env: Env): Promise<Response> {
   const body = parseBodyRecord(await readJson(request, 32_000));
   const name = optionalString(body.name, 120);
   const email = optionalString(body.email, 254);
-  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+  const whatsapp = optionalString(body.whatsapp, 30);
+  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
     throw new ValidationError("Informe um e-mail válido.");
   }
+  if (whatsapp && !/^\+?[\d ()-]{8,30}$/.test(whatsapp)) {
+    throw new ValidationError("Informe um WhatsApp válido.");
+  }
+  if (!name && !email && !whatsapp) {
+    throw new ValidationError("Informe pelo menos um dado de contato.");
+  }
+  const rawCustomFields =
+    body.customFields && typeof body.customFields === "object" && !Array.isArray(body.customFields)
+      ? body.customFields as Record<string, unknown>
+      : {};
+  const customFields = Object.fromEntries(
+    Object.entries(rawCustomFields)
+      .slice(0, 20)
+      .filter(([, value]) => ["string", "number", "boolean"].includes(typeof value))
+      .map(([key, value]) => [
+        key.slice(0, 60),
+        typeof value === "string" ? value.slice(0, 500) : value
+      ])
+  );
   const anonymousId = optionalString(body.anonymousId, 100);
-  const emailHash = await hmac(email.toLowerCase(), env.SESSION_SECRET);
+  const emailHash = email ? await hmac(email.toLowerCase(), env.SESSION_SECRET) : null;
   const leadId = randomId();
   await env.DB.batch([
     env.DB.prepare(
-      `INSERT INTO leads(id, anonymous_id, offer_id, funnel_id, page_id, name, email, consent)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO leads(
+        id, anonymous_id, offer_id, funnel_id, page_id, name, email, whatsapp,
+        custom_fields_json, consent
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).bind(
       leadId,
       anonymousId,
@@ -175,6 +225,8 @@ async function handleLead(request: Request, env: Env): Promise<Response> {
       optionalString(body.pageId, 100),
       name,
       email,
+      whatsapp,
+      JSON.stringify(customFields),
       body.consent === true ? 1 : 0
     ),
     env.DB.prepare(
@@ -189,7 +241,7 @@ async function handleLead(request: Request, env: Env): Promise<Response> {
       optionalString(body.offerId, 100),
       optionalString(body.funnelId, 100),
       optionalString(body.pageId, 100),
-      JSON.stringify({ emailHash }),
+      JSON.stringify({ emailHash, hasWhatsapp: Boolean(whatsapp) }),
       `lead:${leadId}`
     )
   ]);

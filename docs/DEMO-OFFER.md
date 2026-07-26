@@ -1,6 +1,6 @@
 # Oferta demonstrativa — Plano Próxima Série
 
-> Conteúdo fictício para testar o Funnel Zero. Não representa produto comercial, prova ou promessa real.
+> Conteúdo fictício para testar a KRANO. Não representa produto comercial, prova ou promessa real.
 
 ## Briefing mestre
 
