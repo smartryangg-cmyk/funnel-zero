@@ -42,10 +42,11 @@ const navigation: NavigationGroup[] = [
         href: "/integrations/cloudflare",
         icon: "☁",
         label: "Cloudflare",
-        match: ["/integrations", "/domains", "/hosting", "/media-library"],
+        match: ["/integrations", "/domains", "/subdomains", "/hosting", "/media-library"],
         mobile: true
       },
       { href: "/domains", icon: "◇", label: "Domínios" },
+      { href: "/subdomains", icon: "⌁", label: "Subdomínios" },
       { href: "/hosting", icon: "▦", label: "Hospedagem" },
       { href: "/media-library", icon: "▣", label: "Gerenciador" }
     ]

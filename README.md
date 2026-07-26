@@ -34,34 +34,34 @@ Este repositório contém o **MVP operacional completo**: instalação idempoten
 - testes unitários e Playwright;
 - licença MIT.
 
-## Instalação
+## Instalação para leigos
 
-Pré-requisitos:
+Único pré-requisito: uma conta gratuita da Cloudflare. Não é necessário instalar
+Git, Node.js, Wrangler ou Docker.
 
-- Node.js 20 ou superior;
-- conta Cloudflare;
-- plano gratuito é suficiente para testar o MVP dentro das franquias atuais.
+**Windows 64 bits**
 
-Clone o repositório e execute somente o instalador:
+1. Baixe [`KRANO-Installer-Windows-x64.exe`](./installers/KRANO-Installer-Windows-x64.exe).
+2. Dê dois cliques e acompanhe as instruções.
+3. Autorize sua conta na página oficial da Cloudflare quando o navegador abrir.
 
-**Windows:** dê dois cliques em `INSTALAR-KRANO.cmd`.
+**Linux 64 bits**
 
-**macOS ou Linux:**
-
-```bash
-git clone https://github.com/smartryangg-cmyk/funnel-zero.git
-cd funnel-zero
-sh install.sh
-```
-
-Alternativa multiplataforma:
+1. Baixe [`krano-installer-linux-x64`](./installers/krano-installer-linux-x64).
+2. Execute:
 
 ```bash
-node install.mjs
+chmod +x krano-installer-linux-x64
+./krano-installer-linux-x64
 ```
 
-O próprio instalador baixa as dependências. Não é necessário executar `npm install`
-ou conhecer Wrangler, D1, R2, DNS ou comandos da Cloudflare.
+Os binários baixam o código deste repositório, preparam uma versão portátil do
+Node.js quando necessário, verificam seu SHA-256 e iniciam o instalador guiado.
+Como o projeto é open source e os binários ainda não usam certificado comercial
+de assinatura, o Windows pode exibir o aviso padrão do SmartScreen.
+
+Para desenvolvimento ou sistemas diferentes, os instaladores antigos continuam
+disponíveis: `INSTALAR-KRANO.cmd`, `install.sh` e `node install.mjs`.
 
 O instalador:
 
@@ -136,6 +136,8 @@ Navegador
 apps/
   web/                  interface React
   worker/               API e autenticação
+installer/              fonte dos binários Windows e Linux
+installers/             executáveis prontos
 packages/
   cli/                  instalador local
   shared/               schemas compartilhados
@@ -168,7 +170,27 @@ Consulte [SECURITY.md](./SECURITY.md) antes de operar publicamente.
 
 No painel, o administrador escolhe **Conectar KRANO à Cloudflare**. Quando um cliente OAuth público está configurado, a tela oficial da Cloudflare mostra o aplicativo, a conta e as permissões solicitadas. Em qualquer clone instalado pelo GitHub, o fluxo guiado abre a tela oficial de criação de token com conta e permissões já preenchidas; o usuário apenas cria, copia e cola o código uma vez.
 
-Depois da autorização, a área **Domínios** lista automaticamente os domínios ativos da conta. O usuário informa apenas o subdomínio, escolhe um funil realmente publicado e confirma **Publicar neste endereço**. A API oficial da Cloudflare cria o vínculo, configura o DNS e emite o SSL sem exigir Account ID, Zone ID ou novo deploy.
+Depois da autorização, a navegação fica deliberadamente separada:
+
+- **Domínios** contém apenas os domínios-base e zonas DNS, como `seudominio.com`;
+- **Subdomínios** contém os endereços publicados, como `oferta.seudominio.com`.
+
+Em Subdomínios, o usuário escolhe um domínio-base ativo, digita somente o nome,
+seleciona um funil realmente publicado e confirma. A API oficial da Cloudflare
+cria o vínculo, configura o DNS e acompanha o SSL sem exigir Account ID, Zone ID
+ou novo deploy.
+
+## KRATUBE e dashboards
+
+O KRATUBE organiza a hospedagem de vídeo em cinco áreas: biblioteca, editor do
+player, analytics, testes A/B e segurança. O player oferece estilo, controles,
+progresso real, autoplay sem som, retomada, headline, mini-gancho, CTA programado,
+thumbnails A/B, domínios permitidos, marca d'água e métricas de retenção, pitch,
+dispositivo, navegador e origem.
+
+O Dashboard separa Resumo, Funil, UTMs, Eventos e Relatórios. A KRANO calcula os
+dados a partir dos próprios eventos e deixa gastos/lucro como “Conectar” enquanto
+não houver uma conta de anúncios integrada, evitando exibir ROAS fictício.
 
 Credenciais nunca são gravadas no D1: ficam como secrets do próprio Worker da instalação. O token guiado recebe somente Account Settings Read, Workers Scripts Edit, Workers Routes Edit e Zone Edit, restritos à conta instalada. Consulte [docs/CLOUDFLARE-OAUTH.md](./docs/CLOUDFLARE-OAUTH.md).
 

@@ -3,7 +3,9 @@ import type {
   DashboardMetrics,
   FunnelMetricStage,
   QuizAnswerMetric,
-  RetentionPoint
+  RetentionPoint,
+  TrackingEventSummary,
+  UtmMetricRow
 } from "../../../packages/shared/src/schemas";
 
 interface CountRow {
@@ -20,6 +22,24 @@ interface QuizAnswerRow {
   question: string | null;
   answer: string | null;
   value: number;
+}
+
+interface UtmRow {
+  source: string | null;
+  campaign: string | null;
+  page_views: number;
+  checkout_clicks: number;
+  conversions: number;
+  revenue: number;
+}
+
+interface EventRow {
+  id: string;
+  event_type: string;
+  occurred_at: string;
+  source: string | null;
+  campaign: string | null;
+  page_id: string | null;
 }
 
 function percent(value: number, total: number): number {
@@ -104,7 +124,7 @@ export async function readDashboard(env: Env, periodDays: number): Promise<Dashb
     )
   ];
 
-  const [results, dailyRows, quizRows, storage] = await Promise.all([
+  const [results, dailyRows, quizRows, utmRows, eventRows, storage] = await Promise.all([
     env.DB.batch<CountRow>(statements),
     env.DB.prepare(
       `SELECT date(occurred_at) AS bucket, event_type, COUNT(*) AS value
@@ -125,6 +145,28 @@ export async function readDashboard(env: Env, periodDays: number): Promise<Dashb
        ORDER BY value DESC
        LIMIT 8`
     ).bind(since).all<QuizAnswerRow>(),
+    env.DB.prepare(
+      `SELECT
+         COALESCE(NULLIF(source, ''), 'Direto') AS source,
+         COALESCE(NULLIF(campaign, ''), 'Sem campanha') AS campaign,
+         SUM(CASE WHEN event_type = 'page_view' THEN 1 ELSE 0 END) AS page_views,
+         SUM(CASE WHEN event_type = 'checkout_click' THEN 1 ELSE 0 END) AS checkout_clicks,
+         SUM(CASE WHEN event_type = 'purchase' THEN 1 ELSE 0 END) AS conversions,
+         SUM(CASE WHEN event_type = 'purchase' THEN
+           COALESCE(CAST(json_extract(properties_json, '$.value') AS REAL), 0) ELSE 0 END) AS revenue
+       FROM tracking_events
+       WHERE occurred_at > datetime('now', ?)
+       GROUP BY source, campaign
+       ORDER BY conversions DESC, page_views DESC
+       LIMIT 30`
+    ).bind(since).all<UtmRow>(),
+    env.DB.prepare(
+      `SELECT id, event_type, occurred_at, source, campaign, page_id
+       FROM tracking_events
+       WHERE occurred_at > datetime('now', ?)
+       ORDER BY occurred_at DESC
+       LIMIT 40`
+    ).bind(since).all<EventRow>(),
     env.MEDIA.list({ limit: 1000 })
   ]);
   const values = results.map((result) => Number(result.results[0]?.value ?? 0));
@@ -152,6 +194,23 @@ export async function readDashboard(env: Env, periodDays: number): Promise<Dashb
     question: row.question ?? "Pergunta",
     answer: row.answer ?? "Sem resposta",
     count: Number(row.value)
+  }));
+  const utmMetrics: UtmMetricRow[] = utmRows.results.map((row) => ({
+    source: row.source ?? "Direto",
+    campaign: row.campaign ?? "Sem campanha",
+    pageViews: Number(row.page_views),
+    checkoutClicks: Number(row.checkout_clicks),
+    conversions: Number(row.conversions),
+    revenue: Math.round(Number(row.revenue) * 100) / 100,
+    conversionRate: percent(Number(row.conversions), Number(row.page_views))
+  }));
+  const recentEvents: TrackingEventSummary[] = eventRows.results.map((row) => ({
+    id: row.id,
+    eventType: row.event_type,
+    occurredAt: row.occurred_at,
+    source: row.source ?? "Direto",
+    campaign: row.campaign ?? "Sem campanha",
+    pageId: row.page_id
   }));
 
   return {
@@ -181,6 +240,8 @@ export async function readDashboard(env: Env, periodDays: number): Promise<Dashb
     funnelStages,
     retentionCurve,
     dailySeries: buildDailySeries(dailyRows.results, Math.min(days, 30)),
-    topQuizAnswers
+    topQuizAnswers,
+    utmRows: utmMetrics,
+    recentEvents
   };
 }

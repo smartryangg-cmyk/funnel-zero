@@ -12,6 +12,7 @@ interface CloudflareCenterState {
   metrics: DashboardMetrics;
   assets: AssetSummary[];
   domains: DomainSummary[];
+  zones: Array<{ id: string; name: string; status: string }>;
   provider: DomainProviderStatus;
 }
 
@@ -23,15 +24,17 @@ export function CloudflareCenter() {
 
   async function load() {
     try {
-      const [dashboard, assets, domains] = await Promise.all([
+      const [dashboard, assets, domains, zones] = await Promise.all([
         api.dashboard(30),
         api.assets(),
-        api.domains()
+        api.domains(),
+        api.domainZones()
       ]);
       setState({
         metrics: dashboard.metrics,
         assets: assets.assets,
         domains: domains.domains,
+        zones: zones.zones,
         provider: domains.provider
       });
       setError("");
@@ -101,10 +104,18 @@ export function CloudflareCenter() {
             <ModuleCard
               icon="◇"
               eyebrow="DOMÍNIOS"
-              title={`${format(activeDomains.length)} ativo(s)`}
-              text="Adicionar, publicar, acompanhar SSL e remover endereços."
+              title={`${format(state.zones.filter((zone) => zone.status === "active").length)} ativo(s)`}
+              text="Domínios-base, zonas DNS e importação de outros registradores."
               status={state.provider.ready ? "Pronto" : "Conexão pendente"}
               href="/domains"
+            />
+            <ModuleCard
+              icon="⌁"
+              eyebrow="SUBDOMÍNIOS"
+              title={`${format(activeDomains.length)} publicado(s)`}
+              text="Endereços de ofertas e funis com DNS e SSL automáticos."
+              status={`${activeDomains.filter((domain) => domain.certIssued).length} com SSL`}
+              href="/subdomains"
             />
             <ModuleCard
               icon="▦"
@@ -142,9 +153,9 @@ export function CloudflareCenter() {
             </article>
 
             <article className="panel domain-preview">
-              <div className="panel-header"><div><span className="eyebrow">ENDEREÇOS</span><h2>Domínios recentes</h2></div><button className="button ghost" onClick={() => navigate("/domains")}>Ver todos →</button></div>
+              <div className="panel-header"><div><span className="eyebrow">ENDEREÇOS</span><h2>Subdomínios recentes</h2></div><button className="button ghost" onClick={() => navigate("/subdomains")}>Ver todos →</button></div>
               {state.domains.length ? state.domains.slice(0, 4).map((domain) => (
-                <button key={domain.id} onClick={() => navigate("/domains")}>
+                <button key={domain.id} onClick={() => navigate("/subdomains")}>
                   <span className={`domain-health ${domain.status === "active" ? "online" : ""}`} />
                   <div><strong>{domain.hostname}</strong><small>{domain.funnelName || "Sem funil associado"}</small></div>
                   <StatusPill status={domain.status} />
@@ -153,7 +164,7 @@ export function CloudflareCenter() {
                 <div className="mini-cloudflare-empty">
                   <strong>Nenhum domínio próprio ainda.</strong>
                   <p>O endereço gratuito do Worker continua funcionando. Adicione um domínio quando quiser.</p>
-                  <button className="button secondary" onClick={() => navigate("/domains")}>Adicionar domínio</button>
+                  <button className="button secondary" onClick={() => navigate("/subdomains")}>Criar subdomínio</button>
                 </div>
               )}
             </article>

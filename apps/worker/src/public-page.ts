@@ -3,7 +3,7 @@ import type {
   PageDocument,
   PlayerConfig
 } from "../../../packages/shared/src/schemas";
-import { DEFAULT_PLAYER_CONFIG } from "./assets";
+import { DEFAULT_PLAYER_CONFIG, normalizePlayerConfig } from "./assets";
 import { randomId, randomToken } from "./crypto";
 import { escapeHtml, safeColor, safeJson } from "./platform";
 
@@ -155,8 +155,10 @@ function renderBlockContent(
       if (!src) {
         return `<div class="fz-video-placeholder"><strong>VSL ainda não conectada</strong><span>Escolha um vídeo na biblioteca da KRANO.</span></div>`;
       }
-      const poster = safeAssetUrl(content.poster);
       const profile = playerProfiles.get(assetId) ?? DEFAULT_PLAYER_CONFIG;
+      const poster = safeAssetUrl(
+        content.poster ?? (profile.posterAssetId ? `/media/${profile.posterAssetId}` : "")
+      );
       const pitch = Math.max(
         0,
         Number(content.ctaAtSeconds ?? profile.ctaAtSeconds ?? pitchAtSeconds) || 0
@@ -175,19 +177,29 @@ function renderBlockContent(
           : profile.timelineStyle === "minimal"
             ? " timeline-minimal"
             : "";
-      return `<section class="fz-player${controlsClass}" data-fz-player data-pitch="${pitch}" data-profile="${playerData}" data-asset-id="${escapeHtml(assetId)}">
-        <video preload="metadata" playsinline ${profile.autoplayMuted ? "autoplay muted" : ""} ${profile.protectVideo ? `controlslist="nodownload noremoteplayback" disablepictureinpicture` : ""} ${poster ? `poster="${escapeHtml(poster)}"` : ""}>
+      const playerStyle = `--fz-player-accent:${profile.primaryColor};--fz-player-bg:${profile.backgroundColor};--fz-player-radius:${profile.borderRadius}px;--fz-progress-height:${profile.smartProgressHeight}px`;
+      return `<section class="fz-player${controlsClass}" style="${escapeHtml(playerStyle)}" data-fz-player data-pitch="${pitch}" data-profile="${playerData}" data-asset-id="${escapeHtml(assetId)}">
+        ${profile.headlineText ? `<strong class="fz-player-headline" data-timed="headline">${escapeHtml(profile.headlineText)}</strong>` : ""}
+        <video preload="metadata" playsinline ${profile.loop ? "loop" : ""} ${profile.autoplayMuted ? "autoplay muted" : ""} ${profile.protectVideo ? `controlslist="nodownload noremoteplayback" disablepictureinpicture` : ""} ${poster ? `poster="${escapeHtml(poster)}"` : ""}>
           <source src="${escapeHtml(src)}" type="video/mp4">
         </video>
-        <button class="fz-big-play" type="button" aria-label="Reproduzir vídeo">▶</button>
+        <button class="fz-big-play" type="button" aria-label="Reproduzir vídeo"${profile.showBigPlay ? "" : " hidden"}>▶</button>
+        ${profile.autoplayMuted ? `<button class="fz-autoplay-hint" type="button">${escapeHtml(profile.autoplayMessage)}</button>` : ""}
         ${profile.watermark ? `<span class="fz-watermark">${escapeHtml(profile.watermark)}</span>` : ""}
+        ${profile.miniHookText ? `<span class="fz-mini-hook" data-timed="mini-hook">${escapeHtml(profile.miniHookText)}</span>` : ""}
+        ${profile.smartProgress ? `<i class="fz-smart-progress"><b></b></i>` : ""}
+        ${profile.resumePlayback ? `<div class="fz-resume-dialog" hidden><strong>${escapeHtml(profile.resumeMessage)}</strong><div><button type="button" data-action="resume">${escapeHtml(profile.resumeContinueLabel)}</button><button type="button" data-action="restart">${escapeHtml(profile.resumeRestartLabel)}</button></div></div>` : ""}
+        ${profile.ctaUrl ? `<a class="fz-player-cta${profile.ctaPulse ? " pulse" : ""}" data-checkout="true" data-timed="cta" href="${escapeHtml(profile.ctaUrl)}"${profile.ctaNewTab ? ` target="_blank" rel="noopener noreferrer"` : ""}>${escapeHtml(profile.ctaText)}</a>` : ""}
         <div class="fz-controls"${profile.showControls ? "" : " hidden"}>
           <button type="button" data-action="toggle" aria-label="Reproduzir ou pausar">▶</button>
+          ${profile.rewindSeconds ? `<button type="button" data-action="rewind" aria-label="Voltar ${profile.rewindSeconds} segundos">−${profile.rewindSeconds}</button>` : ""}
           <input type="range" data-action="seek" min="0" max="1000" value="0" aria-label="Progresso"${profile.allowSeek ? "" : " disabled"}>
-          <span data-time>0:00 / 0:00</span>
+          ${profile.forwardSeconds ? `<button type="button" data-action="forward" aria-label="Avançar ${profile.forwardSeconds} segundos">+${profile.forwardSeconds}</button>` : ""}
+          ${profile.showTime ? `<span data-time>0:00 / 0:00</span>` : ""}
           ${profile.showVolume ? `<input type="range" data-action="volume" min="0" max="1" step="0.05" value="${profile.autoplayMuted ? "0" : "1"}" aria-label="Volume">` : ""}
           ${profile.showSpeed ? `<select data-action="speed" aria-label="Velocidade"><option value="1">1x</option><option value="1.25">1,25x</option><option value="1.5">1,5x</option><option value="2">2x</option></select>` : ""}
           ${profile.showQuality && qualitySources.length ? `<select data-action="quality" aria-label="Qualidade"><option value="${escapeHtml(src)}">Original</option>${qualitySources.map((item) => `<option value="${escapeHtml(item.src)}">${escapeHtml(item.label)}</option>`).join("")}</select>` : ""}
+          ${profile.showFullscreen ? `<button type="button" data-action="fullscreen" aria-label="Tela cheia">⛶</button>` : ""}
         </div>
       </section>`;
     }
@@ -341,12 +353,45 @@ function trackingScript(meta: Record<string, unknown>, nonce: string): string {
     const volume = root.querySelector('[data-action="volume"]');
     const speed = root.querySelector('[data-action="speed"]');
     const quality = root.querySelector('[data-action="quality"]');
+    const rewind = root.querySelector('[data-action="rewind"]');
+    const forward = root.querySelector('[data-action="forward"]');
+    const fullscreen = root.querySelector('[data-action="fullscreen"]');
+    const autoplayHint = root.querySelector('.fz-autoplay-hint');
+    const resumeDialog = root.querySelector('.fz-resume-dialog');
+    const resumeButton = root.querySelector('[data-action="resume"]');
+    const restartButton = root.querySelector('[data-action="restart"]');
+    const smartProgress = root.querySelector('.fz-smart-progress b');
+    const headline = root.querySelector('[data-timed="headline"]');
+    const miniHook = root.querySelector('[data-timed="mini-hook"]');
+    const playerCta = root.querySelector('[data-timed="cta"]');
     const time = root.querySelector('[data-time]');
     const pitch = Number(root.dataset.pitch || 0);
     const assetId = root.dataset.assetId || '';
     let profile = {};
     try { profile = JSON.parse(root.dataset.profile || '{}'); } catch {}
-    const eventData = (properties = {}) => ({assetId, ...properties});
+    const allowedDomains = Array.isArray(profile.allowedDomains) ? profile.allowedDomains : [];
+    const hostnameAllowed = (rule) => rule.startsWith('*.')
+      ? location.hostname === rule.slice(2) || location.hostname.endsWith('.' + rule.slice(2))
+      : location.hostname === rule;
+    if (allowedDomains.length && !allowedDomains.some(hostnameAllowed)) {
+      root.innerHTML = '<div class="fz-player-blocked"><strong>Vídeo protegido</strong><span>Este domínio não está autorizado na KRANO.</span></div>';
+      return;
+    }
+    const userAgent = navigator.userAgent;
+    const device = /ipad|tablet/i.test(userAgent) ? 'Tablet' : /mobile|android|iphone/i.test(userAgent) ? 'Celular' : 'Desktop';
+    const browser = /edg/i.test(userAgent) ? 'Edge' : /firefox/i.test(userAgent) ? 'Firefox' : /chrome|crios/i.test(userAgent) ? 'Chrome' : /safari/i.test(userAgent) ? 'Safari' : 'Outro';
+    let playerVariant = 'principal';
+    if (profile.posterAssetId && profile.posterTestAssetId) {
+      const hash = [...aid].reduce((sum, character) => sum + character.charCodeAt(0), 0);
+      if (hash % 2) {
+        video.poster = '/media/' + profile.posterTestAssetId;
+        playerVariant = 'thumbnail-b';
+      } else {
+        video.poster = '/media/' + profile.posterAssetId;
+        playerVariant = 'thumbnail-a';
+      }
+    }
+    const eventData = (properties = {}) => ({assetId, device, browser, playerVariant, ...properties});
     const resumeKey = 'fz:resume:' + assetId;
     let lastProgressBucket = 0;
     let lastSavedSecond = -1;
@@ -354,6 +399,12 @@ function trackingScript(meta: Record<string, unknown>, nonce: string): string {
       String(Math.floor(seconds % 60)).padStart(2, '0') : '0:00';
     const playToggle = () => video.paused ? video.play() : video.pause();
     big.addEventListener('click', playToggle);
+    if (autoplayHint) autoplayHint.addEventListener('click', () => {
+      video.muted = false;
+      video.volume = 1;
+      autoplayHint.hidden = true;
+      video.play().catch(() => {});
+    });
     if (toggle) toggle.addEventListener('click', playToggle);
     if (profile.clickToPause !== false) video.addEventListener('click', playToggle);
     if (volume) volume.addEventListener('input', () => {
@@ -362,6 +413,16 @@ function trackingScript(meta: Record<string, unknown>, nonce: string): string {
     });
     if (seek && profile.allowSeek !== false) seek.addEventListener('input', () => {
       if (video.duration) video.currentTime = Number(seek.value) / 1000 * video.duration;
+    });
+    if (rewind) rewind.addEventListener('click', () => {
+      video.currentTime = Math.max(0, video.currentTime - Number(profile.rewindSeconds || 0));
+    });
+    if (forward) forward.addEventListener('click', () => {
+      video.currentTime = Math.min(video.duration || Infinity, video.currentTime + Number(profile.forwardSeconds || 0));
+    });
+    if (fullscreen) fullscreen.addEventListener('click', () => {
+      if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+      else root.requestFullscreen().catch(() => {});
     });
     if (speed) speed.addEventListener('change', () => { video.playbackRate = Number(speed.value); });
     if (quality) quality.addEventListener('change', () => {
@@ -379,9 +440,23 @@ function trackingScript(meta: Record<string, unknown>, nonce: string): string {
       video.addEventListener('dragstart', (event) => event.preventDefault());
     }
     video.addEventListener('loadedmetadata', () => {
+      video.playbackRate = Math.min(Math.max(Number(profile.playbackRate || 1), .75), 1.5);
       if (profile.resumePlayback !== false && assetId) {
         const saved = Number(localStorage.getItem(resumeKey) || 0);
-        if (saved > 3 && saved < video.duration - 3) video.currentTime = saved;
+        if (saved > 3 && saved < video.duration - 3 && resumeDialog) {
+          resumeDialog.hidden = false;
+          if (resumeButton) resumeButton.addEventListener('click', () => {
+            video.currentTime = saved;
+            resumeDialog.hidden = true;
+            video.play().catch(() => {});
+          }, {once:true});
+          if (restartButton) restartButton.addEventListener('click', () => {
+            localStorage.removeItem(resumeKey);
+            video.currentTime = 0;
+            resumeDialog.hidden = true;
+            video.play().catch(() => {});
+          }, {once:true});
+        }
       }
       if (profile.autoplayMuted === true) {
         video.muted = true;
@@ -390,6 +465,7 @@ function trackingScript(meta: Record<string, unknown>, nonce: string): string {
     }, {once:true});
     video.addEventListener('play', () => {
       big.hidden = true;
+      if (autoplayHint && !video.muted) autoplayHint.hidden = true;
       if (toggle) toggle.textContent = 'Ⅱ';
       emit('vsl_start', eventData(), 'vsl_start:' + assetId);
     });
@@ -400,7 +476,17 @@ function trackingScript(meta: Record<string, unknown>, nonce: string): string {
     video.addEventListener('timeupdate', () => {
       const ratio = video.duration ? video.currentTime / video.duration : 0;
       if (seek) seek.value = String(Math.round(ratio * 1000));
+      if (smartProgress) smartProgress.style.width = String(Math.round(ratio * 10000) / 100) + '%';
       if (time) time.textContent = format(video.currentTime) + ' / ' + format(video.duration);
+      const current = video.currentTime;
+      const showBetween = (element, start, end) => {
+        if (!element) return;
+        const visible = current >= Number(start || 0) && (!Number(end) || current <= Number(end));
+        element.classList.toggle('visible', visible);
+      };
+      showBetween(headline, profile.headlineStartSeconds, profile.headlineEndSeconds);
+      showBetween(miniHook, profile.miniHookStartSeconds, profile.miniHookEndSeconds);
+      showBetween(playerCta, profile.ctaAtSeconds, profile.ctaEndSeconds);
       if (ratio >= .25) emit('vsl_25', eventData(), 'vsl_25:' + assetId);
       if (ratio >= .50) emit('vsl_50', eventData(), 'vsl_50:' + assetId);
       if (ratio >= .75) emit('vsl_75', eventData(), 'vsl_75:' + assetId);
@@ -516,7 +602,7 @@ async function readPlayerProfiles(
   return new Map(
     rows.results.map((row) => [
       row.id,
-      safeJson<PlayerConfig>(row.player_config_json, DEFAULT_PLAYER_CONFIG)
+      normalizePlayerConfig(safeJson<unknown>(row.player_config_json, DEFAULT_PLAYER_CONFIG))
     ])
   );
 }
@@ -659,12 +745,19 @@ export async function servePublicPage(
     .fz-heading{font-size:clamp(2rem,6vw,4.5rem);line-height:1.02;text-align:inherit;letter-spacing:-.045em;max-width:880px}
     .fz-copy{font-size:clamp(1rem,2.2vw,1.25rem);max-width:720px;text-align:inherit;color:color-mix(in srgb,currentColor 78%,transparent)}
     .fz-copy p{margin:0 0 1em}.fz-image img{display:block;max-width:100%;border-radius:20px;margin:auto}
-    .fz-player,.fz-video-placeholder{position:relative;max-width:860px;aspect-ratio:16/9;border-radius:22px;overflow:hidden;background:#02040a;border:1px solid color-mix(in srgb,var(--text) 16%,transparent);box-shadow:0 30px 80px #0008}
-    .fz-player video{width:100%;height:100%;display:block}.fz-big-play{position:absolute;inset:50% auto auto 50%;translate:-50% -50%;width:78px;height:78px;border:0;border-radius:50%;background:var(--accent);color:white;font-size:28px;cursor:pointer}
+    .fz-player,.fz-video-placeholder{position:relative;max-width:860px;aspect-ratio:16/9;border-radius:var(--fz-player-radius,22px);overflow:hidden;background:var(--fz-player-bg,#02040a);border:1px solid color-mix(in srgb,var(--text) 16%,transparent);box-shadow:0 30px 80px #0008}
+    .fz-player video{width:100%;height:100%;display:block}.fz-big-play{position:absolute;z-index:5;inset:50% auto auto 50%;translate:-50% -50%;width:78px;height:78px;border:0;border-radius:50%;background:var(--fz-player-accent,var(--accent));color:white;font-size:28px;cursor:pointer}
     .fz-watermark{position:absolute;right:14px;top:14px;padding:5px 9px;border-radius:8px;background:#0009;color:#fff;font-size:11px;pointer-events:none}
-    .fz-controls{position:absolute;inset:auto 0 0;display:flex;gap:12px;align-items:center;padding:14px;background:linear-gradient(transparent,#000d)}
-    .fz-controls button{border:0;background:transparent;color:white;font-size:20px}.fz-controls input[data-action=seek]{flex:1;accent-color:var(--accent)}.fz-controls input[data-action=seek]:disabled{opacity:.55}.fz-controls input[data-action=volume]{width:80px;accent-color:var(--accent)}.fz-controls span{font-size:12px;white-space:nowrap}.fz-controls select{border:1px solid #ffffff26;border-radius:8px;background:#080808;color:#fff;padding:6px}
+    .fz-controls{position:absolute;z-index:6;inset:auto 0 0;display:flex;gap:10px;align-items:center;padding:14px;background:linear-gradient(transparent,#000d)}
+    .fz-controls button{border:0;background:transparent;color:white;font-size:15px}.fz-controls input[data-action=seek]{flex:1;accent-color:var(--fz-player-accent,var(--accent))}.fz-controls input[data-action=seek]:disabled{opacity:.55}.fz-controls input[data-action=volume]{width:80px;accent-color:var(--fz-player-accent,var(--accent))}.fz-controls span{font-size:12px;white-space:nowrap}.fz-controls select{border:1px solid #ffffff26;border-radius:8px;background:#080808;color:#fff;padding:6px}
     .timeline-minimal .fz-controls input[data-action=seek]{height:3px}.timeline-minimal .fz-controls span{display:none}.timeline-hidden .fz-controls input[data-action=seek],.timeline-hidden .fz-controls span{display:none}
+    .fz-player-headline{display:none;position:absolute;z-index:4;left:50%;top:18px;translate:-50% 0;width:min(92%,720px);padding:9px 13px;border-radius:10px;background:#000b;color:#fff;text-align:center;font-size:clamp(14px,2.2vw,22px)}.fz-player-headline.visible{display:block}
+    .fz-mini-hook{display:none;position:absolute;z-index:7;left:50%;bottom:72px;translate:-50% 0;width:max-content;max-width:92%;padding:9px 14px;border-radius:10px;background:#000d;color:#fff;text-align:center;font-weight:750}.fz-mini-hook.visible{display:block}
+    .fz-smart-progress{position:absolute;z-index:8;inset:auto 0 0;height:var(--fz-progress-height,6px);background:#ffffff24}.fz-smart-progress b{display:block;width:0;height:100%;background:var(--fz-player-accent,var(--accent));transition:width .2s linear}
+    .fz-autoplay-hint{position:absolute;z-index:7;left:50%;bottom:18px;translate:-50% 0;width:min(92%,520px);padding:13px;border:1px solid #ffffff22;border-radius:12px;background:#000d;color:#fff;font-weight:800;cursor:pointer}
+    .fz-resume-dialog{position:absolute;z-index:10;inset:0;place-content:center;padding:24px;background:#000d;color:#fff;text-align:center}.fz-resume-dialog:not([hidden]){display:grid}.fz-resume-dialog strong{font-size:clamp(18px,3vw,26px)}.fz-resume-dialog div{display:flex;justify-content:center;gap:9px;margin-top:18px;flex-wrap:wrap}.fz-resume-dialog button{padding:11px 15px;border:1px solid #ffffff2b;border-radius:10px;background:#111;color:#fff}.fz-resume-dialog button:first-child{background:var(--fz-player-accent,var(--accent));border-color:transparent}
+    .fz-player-cta{display:none;position:absolute;z-index:7;left:50%;bottom:74px;translate:-50% 0;width:max-content;max-width:90%;padding:13px 22px;border-radius:12px;background:var(--fz-player-accent,var(--accent));color:#fff;text-decoration:none;font-weight:900;text-align:center}.fz-player-cta.visible{display:block}.fz-player-cta.pulse{animation:fzPulse 1.6s ease-in-out infinite}@keyframes fzPulse{50%{scale:1.035;box-shadow:0 0 0 10px color-mix(in srgb,var(--fz-player-accent,var(--accent)) 16%,transparent)}}
+    .fz-player-blocked{display:grid;place-content:center;height:100%;padding:28px;text-align:center}.fz-player-blocked strong{font-size:22px}.fz-player-blocked span{margin-top:8px;color:#aaa}
     .fz-video-placeholder{display:grid;place-content:center;text-align:center;color:#94a3b8}.fz-video-placeholder strong{color:white;font-size:24px}.fz-video-placeholder span{display:block}
     .fz-cta-wrap{text-align:inherit}.fz-cta{display:inline-flex;justify-content:center;align-items:center;border:0;border-radius:var(--button-radius);padding:17px 28px;background:var(--accent);color:white;text-decoration:none;font-weight:800;font-size:18px;cursor:pointer;box-shadow:0 16px 44px color-mix(in srgb,var(--accent) 35%,transparent)}
     .fz-delayed-cta{display:none}.fz-delayed-cta.visible{display:block}.fz-spacer{height:44px}.fz-divider{border:0;border-top:1px solid color-mix(in srgb,var(--text) 18%,transparent);max-width:720px}
