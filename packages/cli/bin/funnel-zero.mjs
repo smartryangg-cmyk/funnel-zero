@@ -279,11 +279,22 @@ function remoteInstallationComplete(databaseName, accountId) {
   }
 }
 
-function insertSetupToken(databaseName, tokenHash, accountId) {
+function insertSetupToken(databaseName, tokenHash, accountId, workerName = "krano-app") {
   const sqlPath = join(stateDir, "issue-setup-token.sql");
+  const providerConfigJson = JSON.stringify({
+    configured: true,
+    connected: false,
+    authMode: "none",
+    accountId: accountId,
+    accountName: `Cloudflare (${accountId.slice(0, 8)})`,
+    workerName: workerName,
+    scopes: [],
+    permissionVersion: 2
+  }).replace(/'/g, "''");
   const statement = [
     "UPDATE setup_tokens SET used_at = datetime('now') WHERE used_at IS NULL;",
-    `INSERT INTO setup_tokens(id, token_hash, expires_at) VALUES ('${randomUUID()}', '${tokenHash}', datetime('now', '+2 hours'));`
+    `INSERT INTO setup_tokens(id, token_hash, expires_at) VALUES ('${randomUUID()}', '${tokenHash}', datetime('now', '+2 hours'));`,
+    `INSERT INTO installation_settings(key, value_json, updated_at) VALUES ('domain_provider', '${providerConfigJson}', datetime('now')) ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = datetime('now');`
   ].join("\n");
   writeFileSync(sqlPath, `${statement}\n`, "utf8");
   try {
@@ -447,7 +458,7 @@ async function setup() {
     } else {
       const setupToken = randomBytes(32).toString("base64url");
       const setupTokenHash = createHash("sha256").update(setupToken).digest("hex");
-      insertSetupToken(databaseName, setupTokenHash, accountId);
+      insertSetupToken(databaseName, setupTokenHash, accountId, workerName);
       setupUrl = `${deploymentUrl}/setup?token=${encodeURIComponent(setupToken)}`;
     }
 
