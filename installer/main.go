@@ -525,9 +525,16 @@ func extractTarGz(archive, destination string) error {
 				return err
 			}
 		case tar.TypeSymlink:
-			// Node.js does not require archive symlinks for this portable runtime.
-			// Ignoring them prevents a crafted link from escaping the destination.
-			continue
+			if err := validateArchiveSymlink(destination, header.Name, header.Linkname); err != nil {
+				return err
+			}
+			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+				return err
+			}
+			linkName := filepath.FromSlash(header.Linkname)
+			if err := os.Symlink(linkName, target); err != nil && !errors.Is(err, os.ErrExist) {
+				return err
+			}
 		}
 	}
 	return nil
@@ -543,6 +550,18 @@ func safeJoin(root, name string) (string, error) {
 		return "", errors.New("o pacote contém um caminho inseguro")
 	}
 	return target, nil
+}
+
+func validateArchiveSymlink(root, archiveName, linkName string) error {
+	normalizedLink := filepath.FromSlash(linkName)
+	if filepath.IsAbs(normalizedLink) {
+		return errors.New("o pacote contém um link absoluto inseguro")
+	}
+	linkFolder := filepath.Dir(filepath.FromSlash(archiveName))
+	if _, err := safeJoin(root, filepath.Join(linkFolder, normalizedLink)); err != nil {
+		return errors.New("o pacote contém um link que sai da pasta de instalação")
+	}
+	return nil
 }
 
 func contains(values []string, expected string) bool {
