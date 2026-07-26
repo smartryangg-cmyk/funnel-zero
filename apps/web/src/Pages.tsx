@@ -112,8 +112,10 @@ function CreatePage({
   const [offerId, setOfferId] = useState(offers[0]?.id ?? "");
   const [templateId, setTemplateId] = useState(templates[0]?.id ?? "");
   const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
   async function submit(event: FormEvent) {
     event.preventDefault();
+    setSaving(true);
     const template = templates.find((item) => item.id === templateId);
     try {
       const result = await api.createPage({
@@ -125,6 +127,8 @@ function CreatePage({
       onCreated(result.page.id);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Falha ao criar página.");
+    } finally {
+      setSaving(false);
     }
   }
   return (
@@ -136,7 +140,7 @@ function CreatePage({
           {templates.map((template) => <button type="button" key={template.id} className={templateId === template.id ? "selected" : ""} onClick={() => setTemplateId(template.id)}><strong>{template.name}</strong><small>{template.category}</small></button>)}
         </div>
         {error && <p className="form-error">{error}</p>}
-        <div className="form-actions"><button type="button" className="button ghost" onClick={onClose}>Cancelar</button><button className="button primary">Criar página</button></div>
+        <div className="form-actions"><button type="button" className="button ghost" onClick={onClose} disabled={saving}>Cancelar</button><button className="button primary" disabled={saving}>{saving ? "Criando..." : "Criar página"}</button></div>
       </form>
     </Modal>
   );

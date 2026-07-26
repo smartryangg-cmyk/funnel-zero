@@ -283,7 +283,7 @@ function Login({ onComplete }: { onComplete: () => Promise<void> }) {
             <button
               type="button"
               className="button ghost"
-              style={{ padding: 0, fontSize: "12px", color: "#a1a1aa" }}
+              style={{ padding: 0, fontSize: "12px", color: "var(--muted)" }}
               onClick={() => { setMode("reset"); setError(""); setNotice(""); setCodeSent(false); }}
             >
               Esqueceu a senha?
@@ -321,7 +321,7 @@ function Login({ onComplete }: { onComplete: () => Promise<void> }) {
                   transform: "translateY(-50%)",
                   background: "none",
                   border: "none",
-                  color: "#a1a1aa",
+                  color: "var(--muted)",
                   cursor: "pointer"
                 }}
                 onClick={() => setShowPassword(!showPassword)}
