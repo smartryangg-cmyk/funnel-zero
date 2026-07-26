@@ -2,6 +2,7 @@ import {
   Suspense,
   lazy,
   useEffect,
+  useId,
   useState,
   type FormEvent,
   type ReactNode
@@ -34,27 +35,63 @@ type BootstrapState =
 
 export default function App() {
   const [bootstrap, setBootstrap] = useState<BootstrapState>({ status: "loading" });
-  const [path, setPath] = useState(window.location.pathname);
+  const [locationKey, setLocationKey] = useState(readLocationKey);
+  const path = window.location.pathname;
 
   async function refresh() {
     try {
       setBootstrap({ status: "ready", data: await api.bootstrap() });
     } catch (error) {
-      setBootstrap({ status: "error", message: error instanceof Error ? error.message : "Falha ao carregar a instalação." });
+      setBootstrap({
+        status: "error",
+        message: error instanceof Error ? error.message : "Falha ao carregar a instalação."
+      });
     }
   }
-  useEffect(() => { void refresh(); }, []);
+
   useEffect(() => {
-    const update = () => setPath(window.location.pathname);
+    void refresh();
+  }, []);
+
+  useEffect(() => {
+    const update = () => setLocationKey(readLocationKey());
     addEventListener("popstate", update);
     return () => removeEventListener("popstate", update);
   }, []);
 
+  useEffect(() => {
+    document.title = `${routeTitle(path)} · KRANO`;
+  }, [locationKey, path]);
+
   if (bootstrap.status === "loading") return <Loading />;
-  if (bootstrap.status === "error") return <Centered><Brand /><div className="notice error"><strong>Não foi possível abrir a KRANO</strong><p>{bootstrap.message}</p><button className="button secondary" onClick={() => void refresh()}>Tentar novamente</button></div></Centered>;
-  if (path === "/") return <Redirect to={!bootstrap.data.installed ? "/setup" : bootstrap.data.user ? "/home" : "/login"} />;
-  if (path === "/setup") return bootstrap.data.installed ? <Redirect to="/login" /> : <Setup onComplete={refresh} />;
-  if (path === "/login") return bootstrap.data.user ? <Redirect to="/home" /> : <Login onComplete={refresh} />;
+  if (bootstrap.status === "error") {
+    return (
+      <Centered>
+        <Brand />
+        <div className="notice error">
+          <strong>Não foi possível abrir a KRANO</strong>
+          <p>{bootstrap.message}</p>
+          <button className="button secondary" onClick={() => void refresh()}>Tentar novamente</button>
+        </div>
+      </Centered>
+    );
+  }
+
+  if (path === "/") {
+    return <Redirect to={!bootstrap.data.installed ? "/setup" : bootstrap.data.user ? "/home" : "/login"} />;
+  }
+  if (path === "/setup") {
+    return bootstrap.data.installed ? <Redirect to="/login" /> : <Setup onComplete={refresh} />;
+  }
+  if (path === "/login") {
+    return bootstrap.data.user ? <Redirect to="/home" /> : <Login onComplete={refresh} />;
+  }
+  if (path === "/recover") {
+    return bootstrap.data.user ? <Redirect to="/account" /> : <RecoverAccess />;
+  }
+  if (path === "/reset-password") {
+    return bootstrap.data.user ? <Redirect to="/account" /> : <ResetPassword onComplete={refresh} />;
+  }
   if (!bootstrap.data.user) return <Redirect to="/login" />;
 
   const funnelMatch = path.match(/^\/funnels\/([^/]+)$/);
@@ -86,40 +123,95 @@ export default function App() {
     await refresh();
     navigate("/login", true);
   }
+
   return (
-    <AppShell user={bootstrap.data.user} environment={bootstrap.data.environment} path={path} onLogout={logout}>
+    <AppShell
+      user={bootstrap.data.user}
+      environment={bootstrap.data.environment}
+      path={path}
+      onLogout={logout}
+    >
       <Suspense fallback={<FeatureLoading />}>{content}</Suspense>
     </AppShell>
   );
 }
 
 function Setup({ onComplete }: { onComplete: () => Promise<void> }) {
-  const token = new URLSearchParams(location.search).get("token") ?? "";
+  const token = new URLSearchParams(window.location.search).get("token") ?? "";
   const [form, setForm] = useState({ name: "", email: "", password: "", confirm: "" });
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
+  const passwordReady = passwordStrength(form.password).every(Boolean);
+
   async function submit(event: FormEvent) {
     event.preventDefault();
+    setError("");
+    if (!passwordReady) return setError("Complete todos os requisitos de segurança da senha.");
     if (form.password !== form.confirm) return setError("As senhas não coincidem.");
     setSaving(true);
     try {
-      await api.setup({ token, name: form.name, email: form.email, password: form.password });
+      await api.setup({
+        token,
+        name: form.name.trim(),
+        email: form.email.trim(),
+        password: form.password
+      });
       await onComplete();
       navigate("/home", true);
     } catch (caught) {
-      setError(caught instanceof ApiError ? caught.message : "Falha ao configurar.");
-    } finally { setSaving(false); }
+      setError(apiErrorMessage(caught, "Não foi possível concluir a configuração."));
+    } finally {
+      setSaving(false);
+    }
   }
+
   return (
-    <AuthLayout badge="Configuração inicial" title="Sua infraestrutura. Suas regras." subtitle="Crie o proprietário desta instalação. O link de uso único será invalidado.">
-      {!token && <div className="notice warning">Execute <code>npm run setup</code> e abra a URL gerada.</div>}
-      <form className="form" onSubmit={(event) => void submit(event)}>
-        <Field label="Seu nome"><input required minLength={2} value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /></Field>
-        <Field label="E-mail administrativo"><input type="email" required value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} /></Field>
-        <Field label="Senha forte"><input type="password" required minLength={12} value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} /></Field>
-        <Field label="Confirmar senha"><input type="password" required value={form.confirm} onChange={(event) => setForm({ ...form, confirm: event.target.value })} /></Field>
-        {error && <p className="form-error">{error}</p>}
-        <button className="button primary full" disabled={!token || saving}>{saving ? "Criando…" : "Concluir configuração"}</button>
+    <AuthLayout
+      badge="Configuração inicial"
+      title="Prepare sua central de comando."
+      subtitle="Crie o proprietário desta instalação. O link de configuração é usado uma única vez."
+    >
+      {!token && (
+        <div className="notice warning">
+          Este link não contém a chave de configuração. Abra novamente a URL entregue pelo instalador.
+        </div>
+      )}
+      <form className="form auth-form" onSubmit={(event) => void submit(event)}>
+        <Field label="Seu nome">
+          <input
+            required
+            minLength={2}
+            autoComplete="name"
+            value={form.name}
+            onChange={(event) => setForm({ ...form, name: event.target.value })}
+          />
+        </Field>
+        <Field label="E-mail administrativo">
+          <input
+            type="email"
+            required
+            autoComplete="email"
+            value={form.email}
+            onChange={(event) => setForm({ ...form, email: event.target.value })}
+          />
+        </Field>
+        <PasswordField
+          label="Crie uma senha forte"
+          autoComplete="new-password"
+          value={form.password}
+          onChange={(password) => setForm({ ...form, password })}
+        />
+        <PasswordChecklist password={form.password} />
+        <PasswordField
+          label="Confirme a senha"
+          autoComplete="new-password"
+          value={form.confirm}
+          onChange={(confirm) => setForm({ ...form, confirm })}
+        />
+        {error && <p className="form-error" role="alert">{error}</p>}
+        <button className="button primary full" disabled={!token || saving}>
+          {saving ? "Criando sua KRANO…" : "Concluir configuração"}
+        </button>
       </form>
       <Security />
     </AuthLayout>
@@ -131,36 +223,251 @@ function Login({ onComplete }: { onComplete: () => Promise<void> }) {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
+
   async function submit(event: FormEvent) {
     event.preventDefault();
     setSaving(true);
     setError("");
     try {
-      await api.login({ email, password });
+      await api.login({ email: email.trim(), password });
       await onComplete();
       navigate("/home", true);
     } catch (caught) {
-      setError(caught instanceof ApiError ? caught.message : "Falha ao entrar.");
-    } finally { setSaving(false); }
+      setError(apiErrorMessage(caught, "Não foi possível entrar."));
+    } finally {
+      setSaving(false);
+    }
   }
+
   return (
-    <AuthLayout badge="Painel autohospedado" title="Volte a testar ofertas." subtitle="Entre no painel que roda dentro da sua própria conta Cloudflare.">
-      <form className="form" onSubmit={(event) => void submit(event)}>
-        <Field label="E-mail"><input type="email" autoComplete="email" required value={email} onChange={(event) => setEmail(event.target.value)} /></Field>
-        <Field label="Senha"><input type="password" autoComplete="current-password" required value={password} onChange={(event) => setPassword(event.target.value)} /></Field>
-        {error && <p className="form-error">{error}</p>}
-        <button className="button primary full" disabled={saving}>{saving ? "Entrando…" : "Entrar na KRANO"}</button>
+    <AuthLayout
+      badge="Acesso seguro"
+      title="Entre na sua central."
+      subtitle="Gerencie ofertas, páginas, vídeos, domínios e métricas em um só lugar."
+    >
+      <form className="form auth-form" onSubmit={(event) => void submit(event)}>
+        <Field label="E-mail">
+          <input
+            type="email"
+            inputMode="email"
+            autoComplete="email"
+            required
+            value={email}
+            onChange={(event) => setEmail(event.target.value)}
+          />
+        </Field>
+        <PasswordField
+          label="Senha"
+          autoComplete="current-password"
+          value={password}
+          onChange={setPassword}
+        />
+        <div className="auth-form-links">
+          <button type="button" className="text-button" onClick={() => navigate("/recover")}>
+            Esqueci minha senha
+          </button>
+        </div>
+        {error && <p className="form-error" role="alert">{error}</p>}
+        <button className="button primary full" disabled={saving}>
+          {saving ? "Entrando…" : "Entrar na KRANO"}
+        </button>
       </form>
       <Security />
     </AuthLayout>
   );
 }
 
-function AuthLayout({ badge, title, subtitle, children }: { badge: string; title: string; subtitle: string; children: ReactNode }) {
+function RecoverAccess() {
+  const [value, setValue] = useState("");
+  const [error, setError] = useState("");
+
+  function continueRecovery(event: FormEvent) {
+    event.preventDefault();
+    setError("");
+    const token = extractRecoveryToken(value);
+    if (!token) {
+      setError("Cole o link completo ou o código de recuperação gerado pelo instalador.");
+      return;
+    }
+    navigate(`/reset-password?token=${encodeURIComponent(token)}`);
+  }
+
+  return (
+    <AuthLayout
+      badge="Recuperação de acesso"
+      title="Redefina sem depender de e-mail."
+      subtitle="Como a KRANO roda na sua própria Cloudflare, a recuperação é feita por uma chave segura criada pelo instalador."
+    >
+      <div className="recovery-steps">
+        <span>1</span>
+        <p>Abra o instalador da KRANO e escolha <strong>Recuperar acesso</strong>.</p>
+        <span>2</span>
+        <p>O instalador abrirá um link temporário neste navegador.</p>
+      </div>
+      <form className="form auth-form" onSubmit={continueRecovery}>
+        <Field label="Link ou código de recuperação">
+          <input
+            required
+            autoComplete="off"
+            value={value}
+            onChange={(event) => setValue(event.target.value)}
+            placeholder="Cole aqui se o navegador não abriu automaticamente"
+          />
+        </Field>
+        {error && <p className="form-error" role="alert">{error}</p>}
+        <button className="button primary full">Continuar</button>
+        <button type="button" className="button secondary full" onClick={() => navigate("/login")}>
+          Voltar ao login
+        </button>
+      </form>
+    </AuthLayout>
+  );
+}
+
+function ResetPassword({ onComplete }: { onComplete: () => Promise<void> }) {
+  const token = new URLSearchParams(window.location.search).get("token") ?? "";
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
+  const ready = passwordStrength(password).every(Boolean);
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    setError("");
+    if (!token) return setError("O link de recuperação está incompleto.");
+    if (!ready) return setError("Complete todos os requisitos de segurança da senha.");
+    if (password !== confirm) return setError("As senhas não coincidem.");
+    setSaving(true);
+    try {
+      await api.completeRecovery({ token, password });
+      await onComplete();
+      navigate("/login", true);
+    } catch (caught) {
+      setError(apiErrorMessage(caught, "Não foi possível redefinir a senha."));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <AuthLayout
+      badge="Nova senha"
+      title="Crie uma nova senha."
+      subtitle="Ao concluir, todas as sessões antigas serão encerradas."
+    >
+      <form className="form auth-form" onSubmit={(event) => void submit(event)}>
+        <PasswordField
+          label="Nova senha"
+          autoComplete="new-password"
+          value={password}
+          onChange={setPassword}
+        />
+        <PasswordChecklist password={password} />
+        <PasswordField
+          label="Confirme a nova senha"
+          autoComplete="new-password"
+          value={confirm}
+          onChange={setConfirm}
+        />
+        {error && <p className="form-error" role="alert">{error}</p>}
+        <button className="button primary full" disabled={!token || saving}>
+          {saving ? "Redefinindo…" : "Salvar nova senha"}
+        </button>
+      </form>
+    </AuthLayout>
+  );
+}
+
+function PasswordField({
+  label,
+  value,
+  onChange,
+  autoComplete
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  autoComplete: "current-password" | "new-password";
+}) {
+  const [visible, setVisible] = useState(false);
+  const inputId = useId();
+  return (
+    <div className="field password-field">
+      <label htmlFor={inputId}>{label}</label>
+      <span className="password-input">
+        <input
+          id={inputId}
+          type={visible ? "text" : "password"}
+          autoComplete={autoComplete}
+          required
+          minLength={autoComplete === "new-password" ? 12 : undefined}
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+        />
+        <button
+          type="button"
+          className="password-toggle"
+          onClick={() => setVisible((current) => !current)}
+          aria-label={visible ? "Ocultar senha" : "Mostrar senha"}
+        >
+          {visible ? "Ocultar" : "Mostrar"}
+        </button>
+      </span>
+    </div>
+  );
+}
+
+function PasswordChecklist({ password }: { password: string }) {
+  const checks = passwordStrength(password);
+  const requirements = [
+    "12 ou mais caracteres",
+    "Letra maiúscula",
+    "Letra minúscula",
+    "Número",
+    "Símbolo"
+  ];
+  return (
+    <div className="password-checklist" aria-label="Requisitos da senha">
+      {requirements.map((requirement, index) => (
+        <span className={checks[index] ? "valid" : ""} key={requirement}>
+          <i aria-hidden="true">{checks[index] ? "✓" : "·"}</i>{requirement}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function AuthLayout({
+  badge,
+  title,
+  subtitle,
+  children
+}: {
+  badge: string;
+  title: string;
+  subtitle: string;
+  children: ReactNode;
+}) {
   return (
     <div className="auth-page">
-      <section className="auth-brand"><Brand /><div className="brand-message"><span className="eyebrow">OPEN SOURCE • CLOUDFLARE</span><h1>Teste ofertas,<br /><em>não ferramentas.</em></h1><p>Seu painel, seus dados e sua infraestrutura.</p></div><div className="infra-row"><span>Workers</span><span>D1</span><span>R2</span><span>MIT</span></div></section>
-      <main className="auth-main"><div className="auth-card"><span className="auth-badge">{badge}</span><h2>{title}</h2><p className="auth-subtitle">{subtitle}</p>{children}</div></main>
+      <section className="auth-brand">
+        <Brand />
+        <div className="brand-message">
+          <span className="eyebrow">OPEN SOURCE • CLOUDFLARE</span>
+          <h1>Seu digital em<br /><em>uma central.</em></h1>
+          <p>Infraestrutura, conversão e dados sob o seu controle.</p>
+        </div>
+        <div className="infra-row"><span>Workers</span><span>D1</span><span>R2</span><span>MIT</span></div>
+      </section>
+      <main className="auth-main">
+        <div className="auth-card">
+          <span className="auth-badge">{badge}</span>
+          <h2>{title}</h2>
+          <p className="auth-subtitle">{subtitle}</p>
+          {children}
+        </div>
+      </main>
     </div>
   );
 }
@@ -168,19 +475,80 @@ function AuthLayout({ badge, title, subtitle, children }: { badge: string; title
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return <label className="field"><span>{label}</span>{children}</label>;
 }
+
 function Security() {
-  return <p className="security-note"><span>⌾</span>Sessão HttpOnly, senha derivada e dados na sua conta.</p>;
+  return <p className="security-note"><span>⌾</span>Sessão HttpOnly, senha protegida e dados na sua conta.</p>;
 }
+
 function Loading() {
-  return <Centered><Brand /><div className="loader" /><p className="muted">Conectando à sua instalação…</p></Centered>;
+  return (
+    <Centered>
+      <Brand />
+      <div className="loader" />
+      <p className="muted">Conectando à sua instalação…</p>
+    </Centered>
+  );
 }
+
 function FeatureLoading() {
   return <div className="feature-loading"><div className="loader" /><span>Carregando ferramenta…</span></div>;
 }
+
 function Centered({ children }: { children: ReactNode }) {
   return <main className="centered">{children}</main>;
 }
+
 function Redirect({ to }: { to: string }) {
-  useEffect(() => { navigate(to, true); }, [to]);
+  useEffect(() => {
+    navigate(to, true);
+  }, [to]);
   return <Loading />;
+}
+
+function readLocationKey() {
+  return `${window.location.pathname}${window.location.search}${window.location.hash}`;
+}
+
+function routeTitle(path: string) {
+  if (path === "/") return "Carregando";
+  if (path === "/setup") return "Configuração";
+  if (path === "/login") return "Entrar";
+  if (path === "/recover" || path === "/reset-password") return "Recuperar acesso";
+  if (path === "/home") return "Central de comando";
+  if (path.startsWith("/funnels")) return "Funis";
+  if (path.startsWith("/pages")) return "Construtor de páginas";
+  if (path === "/kratube") return "KRATUBE";
+  if (path === "/dashboard") return "Dashboards";
+  if (path === "/account") return "Conta";
+  if (path === "/tracking") return "Rastreamento";
+  if (path === "/domains") return "Domínios";
+  if (path === "/subdomains") return "Subdomínios";
+  return "Central de comando";
+}
+
+function passwordStrength(password: string) {
+  return [
+    password.length >= 12,
+    /[A-Z]/.test(password),
+    /[a-z]/.test(password),
+    /\d/.test(password),
+    /[^A-Za-z0-9]/.test(password)
+  ];
+}
+
+function apiErrorMessage(caught: unknown, fallback: string) {
+  if (!(caught instanceof ApiError)) return fallback;
+  if (caught.status === 429) return `${caught.message} Aguarde alguns instantes e tente novamente.`;
+  return caught.message;
+}
+
+function extractRecoveryToken(value: string) {
+  const normalized = value.trim();
+  if (!normalized) return "";
+  try {
+    const url = new URL(normalized);
+    return url.searchParams.get("token") ?? "";
+  } catch {
+    return /^[A-Za-z0-9_-]{24,}$/.test(normalized) ? normalized : "";
+  }
 }

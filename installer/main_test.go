@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -131,5 +132,37 @@ func TestExtractTarGzPreservesSafeNodeSymlinksOnLinux(t *testing.T) {
 	}
 	if string(resolved) != string(content) {
 		t.Fatal("npm symlink did not resolve to the expected internal file")
+	}
+}
+
+func TestParseCLIResultUsesStructuredSignal(t *testing.T) {
+	output := "progresso\n" + resultPrefix + `{"ok":true,"action":"onboarding","url":"https://krano.example/setup?token=abc","recoveryFile":"C:\\KRANO\\.funnel-zero\\setup-url.txt","version":"0.2.0"}` + "\n"
+	result, err := parseCLIResult(output)
+	if err != nil {
+		t.Fatalf("valid result was rejected: %v", err)
+	}
+	if !result.OK || result.Action != "onboarding" || result.Version != appVersion {
+		t.Fatalf("unexpected parsed result: %#v", result)
+	}
+}
+
+func TestParseCLIResultRejectsMissingOrUnsafeURL(t *testing.T) {
+	if _, err := parseCLIResult("instalação concluída\n"); err == nil {
+		t.Fatal("missing structured result was accepted")
+	}
+	output := resultPrefix + `{"ok":true,"action":"onboarding","url":"file:///tmp/token"}`
+	if _, err := parseCLIResult(output); err == nil {
+		t.Fatal("unsafe URL was accepted")
+	}
+}
+
+func TestInstallerLogRedactsOneTimeTokens(t *testing.T) {
+	input := `Abra https://krano.example/reset-password?token=segredo-123&next=login`
+	redacted := redactSensitiveURLs(input)
+	if strings.Contains(redacted, "segredo-123") {
+		t.Fatal("one-time token leaked into the installer log")
+	}
+	if !strings.Contains(redacted, "token=[REDACTED]") {
+		t.Fatalf("expected redaction marker, received %q", redacted)
 	}
 }

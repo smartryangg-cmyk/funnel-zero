@@ -24,12 +24,14 @@ export function CloudflareCenter() {
 
   async function load() {
     try {
-      const [dashboard, assets, domains, zones] = await Promise.all([
+      const [dashboard, assets, domains] = await Promise.all([
         api.dashboard(30),
         api.assets(),
-        api.domains(),
-        api.domainZones()
+        api.domains()
       ]);
+      const zones = domains.provider.ready
+        ? await api.domainZones().catch(() => ({ zones: [] }))
+        : { zones: [] };
       setState({
         metrics: dashboard.metrics,
         assets: assets.assets,
@@ -40,6 +42,7 @@ export function CloudflareCenter() {
       setError("");
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Não foi possível abrir a central Cloudflare.");
+      setState(null);
     }
   }
 
@@ -76,7 +79,7 @@ export function CloudflareCenter() {
       {error && <Notice tone="error">{error}</Notice>}
       {syncMessage && <Notice tone="success">{syncMessage}</Notice>}
 
-      {!state ? <div className="panel skeleton tall" /> : (
+      {!state && !error ? <div className="panel skeleton tall" /> : state ? (
         <>
           <section className={`cloudflare-command panel ${state.provider.ready ? "connected" : ""}`}>
             <div className="cloudflare-command-status">
@@ -170,6 +173,16 @@ export function CloudflareCenter() {
             </article>
           </section>
         </>
+      ) : (
+        <section className="panel connection-recovery">
+          <span className="eyebrow">CONEXÃO GUIADA</span>
+          <h2>Vamos retomar a conexão com segurança.</h2>
+          <p>A KRANO não conseguiu ler o estado da infraestrutura. Tente novamente ou abra a conexão guiada para reparar as permissões.</p>
+          <div className="welcome-actions">
+            <button className="button secondary" onClick={() => void load()}>Tentar novamente</button>
+            <button className="button primary" onClick={() => navigate("/domains")}>Abrir conexão guiada</button>
+          </div>
+        </section>
       )}
     </>
   );

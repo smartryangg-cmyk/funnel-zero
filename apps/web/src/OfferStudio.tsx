@@ -4,15 +4,17 @@ import { api } from "./api";
 import { Empty, Modal, Notice, PageHeader, StatusPill, navigate } from "./ui";
 
 export function OfferStudio() {
+  const params = new URLSearchParams(location.search);
+  const requestedNewOffer = params.get("new") === "1";
   const [offers, setOffers] = useState<OfferSummary[]>([]);
   const [funnels, setFunnels] = useState<FunnelSummary[]>([]);
   const [pages, setPages] = useState<PageSummary[]>([]);
   const [editing, setEditing] = useState<OfferSummary | null | "new">(
-    new URLSearchParams(location.search).get("new") === "1" ? "new" : null
+    requestedNewOffer ? "new" : null
   );
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
-  const focusOffer = new URLSearchParams(location.search).get("offer");
+  const focusOffer = params.get("offer");
 
   async function load() {
     setLoading(true);
@@ -31,6 +33,9 @@ export function OfferStudio() {
     }
   }
   useEffect(() => { void load(); }, []);
+  useEffect(() => {
+    if (requestedNewOffer) setEditing("new");
+  }, [requestedNewOffer]);
 
   const orderedOffers = useMemo(() => focusOffer
     ? [...offers].sort(
@@ -88,8 +93,8 @@ export function OfferStudio() {
                     {offerFunnels.length ? <div className="inline-funnels">{offerFunnels.map((funnel) => <button key={funnel.id} onClick={() => navigate(`/funnels/${funnel.id}`)}><span>{funnel.graph.nodes.length}</span><div><strong>{funnel.name}</strong><small>{funnel.graph.nodes.length} etapas · {funnel.status}</small></div><b>Editar →</b></button>)}</div> : <MiniEmpty text="Nenhum mapa criado." action="Criar funil" onClick={() => void createFunnel(offer)} />}
                   </section>
                   <section className="offer-area pages-area">
-                    <div className="offer-area-header"><div><span className="area-icon">▦</span><div><strong>Páginas do funil</strong><small>Cada card é uma página publicável</small></div></div><button onClick={() => navigate(`/pages?offer=${offer.id}&create=1`)}>+ Nova página</button></div>
-                    {offerPages.length ? <div className="inline-pages">{offerPages.map((page) => <article key={page.id}><div><span className={`page-live-dot ${page.isLive ? "online" : ""}`} /><StatusPill status={page.status} /></div><strong>{page.name}</strong><small>{page.pageType} · revisão {page.revision}</small><div><button onClick={() => navigate(`/pages/${page.id}/edit`)}>Construir</button>{page.publicUrl && <a href={page.publicUrl} target="_blank" rel="noreferrer">Abrir ↗</a>}</div></article>)}</div> : <MiniEmpty text="Nenhuma página nesta oferta." action="Criar página" onClick={() => navigate(`/pages?offer=${offer.id}&create=1`)} />}
+                    <div className="offer-area-header"><div><span className="area-icon">▦</span><div><strong>Páginas do funil</strong><small>Cada card é uma página publicável</small></div></div><button onClick={() => navigate(`/pages?offer=${offer.id}${offerFunnels.length === 1 ? `&funnel=${offerFunnels[0].id}` : ""}&create=1`)}>+ Nova página</button></div>
+                    {offerPages.length ? <div className="inline-pages">{offerPages.map((page) => <article key={page.id}><div><span className={`page-live-dot ${page.isLive ? "online" : ""}`} /><StatusPill status={page.status} /></div><strong>{page.name}</strong><small>{page.pageType} · revisão {page.revision}</small><div><button onClick={() => navigate(`/pages/${page.id}/edit`)}>Construir</button>{page.publicUrl && <a href={page.publicUrl} target="_blank" rel="noreferrer">Abrir ↗</a>}</div></article>)}</div> : <MiniEmpty text="Nenhuma página nesta oferta." action="Criar página" onClick={() => navigate(`/pages?offer=${offer.id}${offerFunnels.length === 1 ? `&funnel=${offerFunnels[0].id}` : ""}&create=1`)} />}
                   </section>
                 </div>
                 <footer className="offer-integrations">

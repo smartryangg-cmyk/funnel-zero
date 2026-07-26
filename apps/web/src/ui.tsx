@@ -1,5 +1,5 @@
 /* eslint-disable react-refresh/only-export-components */
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import type { SessionUser } from "../../../packages/shared/src/schemas";
 
 export function navigate(to: string, replace = false) {
@@ -18,7 +18,7 @@ export function Brand() {
 
 interface NavigationItem {
   href: string;
-  icon: string;
+  icon: IconName;
   label: string;
   badge?: string;
   match?: string[];
@@ -33,22 +33,22 @@ interface NavigationGroup {
 const navigation: NavigationGroup[] = [
   {
     label: "Principal",
-    items: [{ href: "/home", icon: "⌂", label: "Início", mobile: true }]
+    items: [{ href: "/home", icon: "home", label: "Início", mobile: true }]
   },
   {
     label: "Integrações",
     items: [
       {
         href: "/integrations/cloudflare",
-        icon: "☁",
+        icon: "cloud",
         label: "Cloudflare",
-        match: ["/integrations", "/domains", "/subdomains", "/hosting", "/media-library"],
+        match: ["/integrations", "/integrations/cloudflare"],
         mobile: true
       },
-      { href: "/domains", icon: "◇", label: "Domínios" },
-      { href: "/subdomains", icon: "⌁", label: "Subdomínios" },
-      { href: "/hosting", icon: "▦", label: "Hospedagem" },
-      { href: "/media-library", icon: "▣", label: "Gerenciador" }
+      { href: "/domains", icon: "globe", label: "Domínios" },
+      { href: "/subdomains", icon: "branch", label: "Subdomínios" },
+      { href: "/hosting", icon: "server", label: "Hospedagem" },
+      { href: "/media-library", icon: "folder", label: "Gerenciador" }
     ]
   },
   {
@@ -56,7 +56,7 @@ const navigation: NavigationGroup[] = [
     items: [
       {
         href: "/kratube",
-        icon: "▶",
+        icon: "play",
         label: "Vídeos e player",
         match: ["/kratube", "/player"],
         mobile: true
@@ -68,21 +68,21 @@ const navigation: NavigationGroup[] = [
     items: [
       {
         href: "/studio",
-        icon: "⇢",
+        icon: "funnel",
         label: "Ofertas e funis",
         match: ["/studio", "/offers", "/funnels", "/tracking"],
         mobile: true
       },
-      { href: "/pages", icon: "▤", label: "Criador de sites", badge: "depois" }
+      { href: "/pages", icon: "layout", label: "Criador de sites" }
     ]
   },
   {
     label: "Biblioteca",
-    items: [{ href: "/studies", icon: "▱", label: "Estudos", badge: "depois" }]
+    items: [{ href: "/studies", icon: "book", label: "Estudos" }]
   },
   {
     label: "Análise",
-    items: [{ href: "/dashboard", icon: "⌁", label: "Dashboards", badge: "básico", mobile: true }]
+    items: [{ href: "/dashboard", icon: "chart", label: "Dashboards", mobile: true }]
   }
 ];
 
@@ -152,7 +152,7 @@ export function AppShell({
                   aria-label={item.label}
                   onClick={() => navigate(item.href)}
                 >
-                  <span aria-hidden="true">{item.icon}</span>
+                   <span className="nav-icon" aria-hidden="true"><Icon name={item.icon} /></span>
                   <span>{item.label}</span>
                   {item.badge && <i>{item.badge}</i>}
                 </button>
@@ -265,6 +265,14 @@ export function Modal({
   children: ReactNode;
   onClose: () => void;
 }) {
+  useEffect(() => {
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [onClose]);
+
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
       <section className="modal" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}>
@@ -296,4 +304,64 @@ function initials(value: string) {
     .slice(0, 2)
     .map((part) => part[0]?.toUpperCase())
     .join("");
+}
+
+type IconName =
+  | "home"
+  | "cloud"
+  | "globe"
+  | "branch"
+  | "server"
+  | "folder"
+  | "play"
+  | "funnel"
+  | "layout"
+  | "book"
+  | "chart";
+
+function Icon({ name }: { name: IconName }) {
+  const common = {
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: 1.8,
+    strokeLinecap: "round" as const,
+    strokeLinejoin: "round" as const
+  };
+  let drawing: ReactNode;
+  switch (name) {
+    case "home":
+      drawing = <><path d="m3 10 9-7 9 7" /><path d="M5.5 9.5V21h13V9.5M9 21v-7h6v7" /></>;
+      break;
+    case "cloud":
+      drawing = <path d="M6.5 18.5h11a4 4 0 0 0 .7-7.94A6.5 6.5 0 0 0 5.9 8.8a4.85 4.85 0 0 0 .6 9.7Z" />;
+      break;
+    case "globe":
+      drawing = <><circle cx="12" cy="12" r="9" /><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18" /></>;
+      break;
+    case "branch":
+      drawing = <><circle cx="6" cy="5" r="2" /><circle cx="18" cy="7" r="2" /><circle cx="18" cy="18" r="2" /><path d="M6 7v5a5 5 0 0 0 5 5h5M8 5h4a6 6 0 0 1 6 6v5" /></>;
+      break;
+    case "server":
+      drawing = <><rect x="3" y="4" width="18" height="6" rx="2" /><rect x="3" y="14" width="18" height="6" rx="2" /><path d="M7 7h.01M7 17h.01M11 7h7M11 17h7" /></>;
+      break;
+    case "folder":
+      drawing = <path d="M3 6.5a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2V18a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" />;
+      break;
+    case "play":
+      drawing = <><circle cx="12" cy="12" r="9" /><path d="m10 8 6 4-6 4Z" /></>;
+      break;
+    case "funnel":
+      drawing = <><path d="M4 5h16M7 12h10M10 19h4" /><path d="m18 9 3 3-3 3" /></>;
+      break;
+    case "layout":
+      drawing = <><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M3 9h18M9 9v11" /></>;
+      break;
+    case "book":
+      drawing = <><path d="M4 5.5A3.5 3.5 0 0 1 7.5 2H12v18H7.5A3.5 3.5 0 0 0 4 23.5Z" /><path d="M20 5.5A3.5 3.5 0 0 0 16.5 2H12v18h4.5a3.5 3.5 0 0 1 3.5 3.5Z" /></>;
+      break;
+    case "chart":
+      drawing = <><path d="M4 20V10M10 20V4M16 20v-7M22 20H2" /></>;
+      break;
+  }
+  return <svg viewBox="0 0 24 24" aria-hidden="true" {...common}>{drawing}</svg>;
 }

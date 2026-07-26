@@ -1,9 +1,10 @@
 import type {
   FunnelGraph,
+  FunnelNodeType,
   PageDocument,
   SessionUser
 } from "../../../packages/shared/src/schemas";
-import { isPublicRouteReady } from "../../../packages/shared/src/schemas";
+import { inspectFunnelGraph, isPublicRouteReady } from "../../../packages/shared/src/schemas";
 import { randomId } from "./crypto";
 import { errorResponse, json, readJson, requireSameOrigin } from "./http";
 import {
@@ -181,21 +182,45 @@ function validateGraph(value: unknown): FunnelGraph {
   const nodes = Array.isArray(body.nodes) ? body.nodes : [];
   const edges = Array.isArray(body.edges) ? body.edges : [];
   if (nodes.length > 100 || edges.length > 200) throw new ValidationError("O mapa excedeu o limite.");
+  const allowedTypes: FunnelNodeType[] = ["page", "vsl", "lead", "checkout"];
   const parsedNodes = nodes.map((item, index) => {
     const node = parseBodyRecord(item);
     const position = parseBodyRecord(node.position ?? {});
+    const rawType = optionalString(node.type, 40) ?? "page";
+    if (!allowedTypes.includes(rawType as FunnelNodeType)) {
+      throw new ValidationError(`Tipo de etapa inválido na posição ${index + 1}.`);
+    }
+    const rawConfig = node.config && typeof node.config === "object" && !Array.isArray(node.config)
+      ? node.config as Record<string, unknown>
+      : {};
+    const config = { ...rawConfig };
+    for (const key of ["pageId", "assetId", "ctaLabel"] as const) {
+      if (key in config) {
+        const parsed = optionalString(config[key], key === "ctaLabel" ? 160 : 100);
+        if (parsed) config[key] = parsed;
+        else delete config[key];
+      }
+    }
+    if ("url" in config) {
+      const parsed = parseHttpUrl(config.url);
+      if (parsed) config.url = parsed;
+      else delete config.url;
+    }
     return {
       id: optionalString(node.id, 100) ?? randomId(),
-      type: optionalString(node.type, 40) ?? "page",
+      type: rawType as FunnelNodeType,
       label: optionalString(node.label, 120) ?? `Etapa ${index + 1}`,
       position: {
         x: Number.isFinite(Number(position.x)) ? Number(position.x) : index * 260,
         y: Number.isFinite(Number(position.y)) ? Number(position.y) : 100
       },
-      config: node.config && typeof node.config === "object" ? node.config as Record<string, unknown> : {}
+      config
     };
   });
   const ids = new Set(parsedNodes.map((node) => node.id));
+  if (ids.size !== parsedNodes.length) {
+    throw new ValidationError("O mapa possui etapas duplicadas. Recarregue e tente novamente.");
+  }
   const parsedEdges = edges
     .map((item) => {
       const edge = parseBodyRecord(item);
@@ -205,9 +230,32 @@ function validateGraph(value: unknown): FunnelGraph {
         target: requiredString(edge.target, "Destino", 100),
         label: optionalString(edge.label, 80) ?? undefined
       };
-    })
-    .filter((edge) => ids.has(edge.source) && ids.has(edge.target) && edge.source !== edge.target);
-  return { version: Number(body.version) || 1, nodes: parsedNodes, edges: parsedEdges };
+    });
+  if (parsedEdges.some((edge) =>
+    !ids.has(edge.source) || !ids.has(edge.target) || edge.source === edge.target
+  )) {
+    throw new ValidationError("O mapa possui uma conexão inválida.");
+  }
+  const edgeIds = new Set<string>();
+  const connections = new Set<string>();
+  for (const edge of parsedEdges) {
+    const connection = `${edge.source}\u0000${edge.target}`;
+    if (edgeIds.has(edge.id) || connections.has(connection)) {
+      throw new ValidationError("O mapa possui uma conexão duplicada.");
+    }
+    edgeIds.add(edge.id);
+    connections.add(connection);
+  }
+  const graph: FunnelGraph = {
+    version: Math.max(Math.trunc(Number(body.version) || 1), 1),
+    nodes: parsedNodes,
+    edges: parsedEdges
+  };
+  const inspection = inspectFunnelGraph(graph);
+  if (inspection.duplicatePageIds.length) {
+    throw new ValidationError("Uma mesma página não pode ocupar duas etapas do funil.");
+  }
+  return graph;
 }
 
 function validateDocument(value: unknown): PageDocument {
@@ -262,6 +310,427 @@ function validateDocument(value: unknown): PageDocument {
         ? body.settings
         : undefined
   };
+}
+
+interface FunnelLinkRow {
+  id: string;
+  offer_id: string | null;
+  graph_json: string;
+}
+
+interface PageLinkRow {
+  id: string;
+  offer_id: string | null;
+  funnel_id: string | null;
+  status?: string;
+  content_json?: string | null;
+}
+
+async function ensureOfferExists(env: Env, offerId: string | null): Promise<void> {
+  if (!offerId) return;
+  const found = await env.DB.prepare("SELECT id FROM offers WHERE id = ?")
+    .bind(offerId)
+    .first<{ id: string }>();
+  if (!found) throw new ValidationError("A oferta selecionada não existe mais.");
+}
+
+async function resolvePageRelationship(
+  env: Env,
+  requestedOfferId: string | null,
+  requestedFunnelId: string | null
+): Promise<{ offerId: string | null; funnelId: string | null }> {
+  let offerId = requestedOfferId;
+  if (requestedFunnelId) {
+    const funnel = await env.DB.prepare("SELECT id, offer_id FROM funnels WHERE id = ?")
+      .bind(requestedFunnelId)
+      .first<{ id: string; offer_id: string | null }>();
+    if (!funnel) throw new ValidationError("O funil selecionado não existe mais.");
+    if (funnel.offer_id && offerId && funnel.offer_id !== offerId) {
+      throw new ValidationError("A página e o funil precisam pertencer à mesma oferta.");
+    }
+    if (!funnel.offer_id && offerId) {
+      throw new ValidationError("Vincule o funil à oferta antes de adicionar páginas.");
+    }
+    offerId = funnel.offer_id ?? offerId;
+  }
+  await ensureOfferExists(env, offerId);
+  return { offerId, funnelId: requestedFunnelId };
+}
+
+function graphStorageStatements(env: Env, funnelId: string, graph: FunnelGraph): D1PreparedStatement[] {
+  const statements: D1PreparedStatement[] = [
+    env.DB.prepare(
+      `UPDATE funnels SET graph_json = ?, graph_version = graph_version + 1,
+       updated_at = datetime('now') WHERE id = ?`
+    ).bind(JSON.stringify(graph), funnelId),
+    env.DB.prepare("DELETE FROM funnel_edges WHERE funnel_id = ?").bind(funnelId),
+    env.DB.prepare("DELETE FROM funnel_nodes WHERE funnel_id = ?").bind(funnelId)
+  ];
+  for (const node of graph.nodes) {
+    statements.push(
+      env.DB.prepare(
+        `INSERT INTO funnel_nodes(id, funnel_id, node_type, label, position_x, position_y, config_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`
+      ).bind(
+        node.id,
+        funnelId,
+        node.type,
+        node.label,
+        node.position.x,
+        node.position.y,
+        JSON.stringify(node.config ?? {})
+      )
+    );
+  }
+  for (const edge of graph.edges) {
+    statements.push(
+      env.DB.prepare(
+        `INSERT INTO funnel_edges(id, funnel_id, source_node_id, target_node_id, label)
+         VALUES (?, ?, ?, ?, ?)`
+      ).bind(edge.id, funnelId, edge.source, edge.target, edge.label ?? null)
+    );
+  }
+  return statements;
+}
+
+function nodeTypeForPage(pageType: string): FunnelNodeType {
+  if (["vsl", "video"].includes(pageType)) return "vsl";
+  if (["lead", "capture", "quiz"].includes(pageType)) return "lead";
+  return "page";
+}
+
+async function preparePageGraphChange(
+  env: Env,
+  page: { id: string; name: string; pageType: string },
+  previousFunnelId: string | null,
+  nextFunnelId: string | null
+): Promise<D1PreparedStatement[]> {
+  const funnelIds = [...new Set(
+    [previousFunnelId, nextFunnelId].filter((value): value is string => Boolean(value))
+  )];
+  if (!funnelIds.length) return [];
+
+  const graphs = new Map<string, FunnelGraph>();
+  const changedFunnelIds = new Set<string>();
+  for (const funnelId of funnelIds) {
+    const row = await env.DB.prepare("SELECT id, offer_id, graph_json FROM funnels WHERE id = ?")
+      .bind(funnelId)
+      .first<FunnelLinkRow>();
+    if (!row) throw new ValidationError("O funil selecionado não existe mais.");
+    graphs.set(
+      funnelId,
+      validateGraph(safeJson<FunnelGraph>(row.graph_json, { version: 1, nodes: [], edges: [] }))
+    );
+  }
+
+  let preferredNodeId: string | null = null;
+  for (const [funnelId, graph] of graphs) {
+    for (const node of graph.nodes) {
+      if (node.config?.pageId !== page.id) continue;
+      if (nextFunnelId && graph === graphs.get(nextFunnelId)) preferredNodeId = node.id;
+      const config = { ...(node.config ?? {}) };
+      delete config.pageId;
+      node.config = config;
+      changedFunnelIds.add(funnelId);
+    }
+  }
+
+  if (nextFunnelId) {
+    const graph = graphs.get(nextFunnelId)!;
+    const desiredType = nodeTypeForPage(page.pageType);
+    let target = preferredNodeId
+      ? graph.nodes.find((node) => node.id === preferredNodeId)
+      : undefined;
+    target ??= graph.nodes.find((node) =>
+      node.type === desiredType && !node.config?.pageId
+    );
+    target ??= graph.nodes.find((node) =>
+      node.type !== "checkout" && !node.config?.pageId
+    );
+    if (!target) {
+      const previous = graph.nodes.at(-1);
+      target = {
+        id: randomId(),
+        type: desiredType,
+        label: page.name,
+        position: {
+          x: Math.max(...graph.nodes.map((node) => node.position.x), -180) + 280,
+          y: previous?.position.y ?? 120
+        },
+        config: {}
+      };
+      graph.nodes.push(target);
+      if (previous) {
+        graph.edges.push({
+          id: randomId(),
+          source: previous.id,
+          target: target.id
+        });
+      }
+    }
+    target.config = { ...(target.config ?? {}), pageId: page.id };
+    if (!target.label.trim() || /^Etapa \d+$/.test(target.label) || target.label === "Página principal") {
+      target.label = page.name;
+    }
+    changedFunnelIds.add(nextFunnelId);
+  }
+
+  for (const funnelId of changedFunnelIds) {
+    const graph = graphs.get(funnelId);
+    if (graph) graph.version += 1;
+  }
+  return funnelIds.flatMap((funnelId) =>
+    graphStorageStatements(env, funnelId, graphs.get(funnelId)!)
+  );
+}
+
+async function validateGraphPageLinks(
+  env: Env,
+  funnelId: string,
+  offerId: string | null,
+  graph: FunnelGraph
+): Promise<{ rows: PageLinkRow[]; statements: D1PreparedStatement[] }> {
+  const inspection = inspectFunnelGraph(graph);
+  if (inspection.duplicatePageIds.length) {
+    throw new ValidationError("Uma página foi vinculada a mais de uma etapa.");
+  }
+  const uniquePageIds = [...new Set(inspection.pageIds)];
+  let rows: PageLinkRow[] = [];
+  if (uniquePageIds.length) {
+    const placeholders = uniquePageIds.map(() => "?").join(", ");
+    rows = (
+      await env.DB.prepare(
+        `SELECT id, offer_id, funnel_id FROM pages WHERE id IN (${placeholders})`
+      ).bind(...uniquePageIds).all<PageLinkRow>()
+    ).results;
+    if (rows.length !== uniquePageIds.length) {
+      throw new ValidationError("Uma das páginas vinculadas não existe mais.");
+    }
+    for (const row of rows) {
+      if (row.funnel_id && row.funnel_id !== funnelId) {
+        throw new ValidationError("Uma página selecionada já pertence a outro funil.");
+      }
+      if (row.offer_id && row.offer_id !== offerId) {
+        throw new ValidationError("Todas as páginas precisam pertencer à oferta do funil.");
+      }
+      if (!offerId && row.offer_id) {
+        throw new ValidationError("Vincule o funil à oferta da página antes de salvar.");
+      }
+    }
+  }
+
+  const statements: D1PreparedStatement[] = [
+    env.DB.prepare(
+      "UPDATE pages SET funnel_id = NULL, updated_at = datetime('now') WHERE funnel_id = ?"
+    ).bind(funnelId)
+  ];
+  for (const pageId of uniquePageIds) {
+    statements.push(
+      env.DB.prepare(
+        `UPDATE pages SET funnel_id = ?, offer_id = ?, updated_at = datetime('now')
+         WHERE id = ?`
+      ).bind(funnelId, offerId, pageId)
+    );
+  }
+  return { rows, statements };
+}
+
+type FunnelReadiness =
+  | {
+      ready: true;
+      offerId: string;
+      pageIds: string[];
+      graph: FunnelGraph;
+    }
+  | {
+      ready: false;
+      code: string;
+      message: string;
+      details?: Record<string, unknown>;
+    };
+
+async function inspectFunnelReadiness(env: Env, funnelId: string): Promise<FunnelReadiness | null> {
+  const current = await env.DB.prepare(
+    `SELECT f.id, f.offer_id, f.graph_json, o.checkout_url
+     FROM funnels f LEFT JOIN offers o ON o.id = f.offer_id WHERE f.id = ?`
+  ).bind(funnelId).first<{
+    id: string;
+    offer_id: string | null;
+    graph_json: string;
+    checkout_url: string | null;
+  }>();
+  if (!current) return null;
+  if (!current.offer_id) {
+    return {
+      ready: false,
+      code: "FUNNEL_WITHOUT_OFFER",
+      message: "Vincule o funil a uma oferta antes de publicar."
+    };
+  }
+
+  let graph: FunnelGraph;
+  try {
+    graph = validateGraph(
+      safeJson<FunnelGraph>(current.graph_json, { version: 1, nodes: [], edges: [] })
+    );
+  } catch (error) {
+    return {
+      ready: false,
+      code: "FUNNEL_GRAPH_INVALID",
+      message: error instanceof Error ? error.message : "O mapa do funil está inválido."
+    };
+  }
+  if (!graph.nodes.length) {
+    return {
+      ready: false,
+      code: "FUNNEL_EMPTY",
+      message: "Adicione pelo menos uma etapa antes de publicar."
+    };
+  }
+  const inspection = inspectFunnelGraph(graph);
+  if (inspection.disconnectedNodeIds.length) {
+    return {
+      ready: false,
+      code: "FUNNEL_DISCONNECTED",
+      message: "Conecte todas as etapas do mapa antes de publicar.",
+      details: { nodeIds: inspection.disconnectedNodeIds }
+    };
+  }
+  if (inspection.unlinkedContentNodeIds.length) {
+    return {
+      ready: false,
+      code: "FUNNEL_UNLINKED_STEPS",
+      message: "Escolha uma página para cada etapa de conteúdo.",
+      details: { nodeIds: inspection.unlinkedContentNodeIds }
+    };
+  }
+  if (!inspection.pageIds.length) {
+    return {
+      ready: false,
+      code: "FUNNEL_WITHOUT_PAGE",
+      message: "O funil precisa ter ao menos uma página publicável."
+    };
+  }
+  const checkoutWithoutDestination = graph.nodes.some((node) =>
+    node.type === "checkout" && !node.config?.url && !current.checkout_url
+  );
+  if (checkoutWithoutDestination) {
+    return {
+      ready: false,
+      code: "CHECKOUT_WITHOUT_DESTINATION",
+      message: "Configure a URL do checkout na etapa ou na oferta."
+    };
+  }
+
+  const pageIds = [...new Set(inspection.pageIds)];
+  const placeholders = pageIds.map(() => "?").join(", ");
+  const pages = (
+    await env.DB.prepare(
+      `SELECT p.id, p.offer_id, p.funnel_id, p.status, d.content_json
+       FROM pages p LEFT JOIN page_drafts d ON d.page_id = p.id
+       WHERE p.id IN (${placeholders})`
+    ).bind(...pageIds).all<PageLinkRow>()
+  ).results;
+  if (pages.length !== pageIds.length) {
+    return {
+      ready: false,
+      code: "FUNNEL_PAGE_MISSING",
+      message: "Uma página do mapa foi excluída. Escolha outra página."
+    };
+  }
+  const invalidPage = pages.find((page) =>
+    page.offer_id !== current.offer_id
+    || page.funnel_id !== funnelId
+    || page.status === "archived"
+    || !page.content_json
+  );
+  if (invalidPage) {
+    return {
+      ready: false,
+      code: "FUNNEL_PAGE_NOT_PUBLISHABLE",
+      message: "Revise os vínculos: todas as etapas precisam de uma página editável da mesma oferta.",
+      details: { pageId: invalidPage.id }
+    };
+  }
+  const hasContent = pages.some((page) => {
+    const document = safeJson<PageDocument | null>(page.content_json, null);
+    return Boolean(document?.blocks.length);
+  });
+  if (!hasContent) {
+    return {
+      ready: false,
+      code: "FUNNEL_WITHOUT_PUBLISHABLE_CONTENT",
+      message: "Adicione conteúdo a pelo menos uma página antes de publicar."
+    };
+  }
+  return { ready: true, offerId: current.offer_id, pageIds, graph };
+}
+
+type ReadyFunnel = Extract<FunnelReadiness, { ready: true }>;
+
+interface PublicationPageRow {
+  id: string;
+  content_json: string;
+  next_version: number;
+}
+
+async function prepareFunnelPublication(
+  env: Env,
+  user: SessionUser,
+  funnelId: string,
+  readiness: ReadyFunnel
+): Promise<{
+  statements: D1PreparedStatement[];
+  versionNumbers: Map<string, number>;
+}> {
+  const placeholders = readiness.pageIds.map(() => "?").join(", ");
+  const rows = (
+    await env.DB.prepare(
+      `SELECT p.id, d.content_json,
+         COALESCE(MAX(v.version_number), 0) + 1 AS next_version
+       FROM pages p
+       JOIN page_drafts d ON d.page_id = p.id
+       LEFT JOIN page_versions v ON v.page_id = p.id
+       WHERE p.id IN (${placeholders})
+       GROUP BY p.id, d.content_json`
+    ).bind(...readiness.pageIds).all<PublicationPageRow>()
+  ).results;
+  if (rows.length !== readiness.pageIds.length) {
+    throw new ValidationError(
+      "Não foi possível preparar todas as páginas do funil para publicação."
+    );
+  }
+
+  const statements: D1PreparedStatement[] = [];
+  const versionNumbers = new Map<string, number>();
+  for (const row of rows) {
+    const versionId = randomId();
+    const versionNumber = Number(row.next_version);
+    versionNumbers.set(row.id, versionNumber);
+    statements.push(
+      env.DB.prepare(
+        `INSERT INTO page_versions(
+           id, page_id, version_number, content_json, created_by
+         ) VALUES (?, ?, ?, ?, ?)`
+      ).bind(versionId, row.id, versionNumber, row.content_json, user.id),
+      env.DB.prepare(
+        `UPDATE pages
+         SET status = 'published', published_version_id = ?,
+           published_at = datetime('now'), updated_at = datetime('now')
+         WHERE id = ?`
+      ).bind(versionId, row.id)
+    );
+  }
+  statements.push(
+    env.DB.prepare(
+      `UPDATE funnels SET status = 'published', published_at = datetime('now'),
+       updated_at = datetime('now') WHERE id = ?`
+    ).bind(funnelId),
+    env.DB.prepare(
+      "UPDATE offers SET status = 'active', updated_at = datetime('now') WHERE id = ?"
+    ).bind(readiness.offerId)
+  );
+  return { statements, versionNumbers };
 }
 
 async function listOffers(env: Env): Promise<OfferRow[]> {
@@ -387,6 +856,7 @@ async function createFunnel(request: Request, env: Env, user: SessionUser): Prom
   const name = requiredString(body.name, "Nome");
   const slug = makeUniqueSlug(name, body.slug);
   const offerId = optionalString(body.offerId, 100);
+  await ensureOfferExists(env, offerId);
   const firstNodeId = randomId();
   const graph: FunnelGraph = {
     version: 1,
@@ -437,64 +907,35 @@ async function updateFunnel(
   );
   const offerId =
     body.offerId === undefined ? current.offer_id : optionalString(body.offerId, 100);
+  await ensureOfferExists(env, offerId);
+  const linkSync = await validateGraphPageLinks(env, id, offerId, graph);
   const statements: D1PreparedStatement[] = [
     env.DB.prepare(
-      `UPDATE funnels SET name = ?, offer_id = ?, status = ?, graph_json = ?,
-       graph_version = graph_version + 1, updated_at = datetime('now') WHERE id = ?`
-    ).bind(name, offerId, status, JSON.stringify(graph), id),
-    env.DB.prepare("DELETE FROM funnel_edges WHERE funnel_id = ?").bind(id),
-    env.DB.prepare("DELETE FROM funnel_nodes WHERE funnel_id = ?").bind(id)
+      `UPDATE funnels SET name = ?, offer_id = ?, status = ?,
+       updated_at = datetime('now') WHERE id = ?`
+    ).bind(name, offerId, status, id),
+    ...graphStorageStatements(env, id, graph),
+    ...linkSync.statements
   ];
-  for (const node of graph.nodes) {
-    statements.push(
-      env.DB.prepare(
-        `INSERT INTO funnel_nodes(id, funnel_id, node_type, label, position_x, position_y, config_json)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`
-      ).bind(
-        node.id,
-        id,
-        node.type,
-        node.label,
-        node.position.x,
-        node.position.y,
-        JSON.stringify(node.config ?? {})
-      )
-    );
-  }
-  for (const edge of graph.edges) {
-    statements.push(
-      env.DB.prepare(
-        `INSERT INTO funnel_edges(id, funnel_id, source_node_id, target_node_id, label)
-         VALUES (?, ?, ?, ?, ?)`
-      ).bind(edge.id, id, edge.source, edge.target, edge.label ?? null)
-    );
-  }
   statements.push(audit(env, user.id, "funnel.updated", "funnel", id));
   await env.DB.batch(statements);
   return json({ funnel: mapFunnel((await listFunnels(env, null)).find((item) => item.id === id)!) });
 }
 
 async function publishFunnel(env: Env, user: SessionUser, id: string): Promise<Response> {
-  const current = await env.DB.prepare("SELECT id, offer_id FROM funnels WHERE id = ?")
-    .bind(id)
-    .first<{ id: string; offer_id: string | null }>();
-  if (!current) return errorResponse(404, "NOT_FOUND", "Funil não encontrado.");
-  const statements: D1PreparedStatement[] = [
-    env.DB.prepare(
-      `UPDATE funnels SET status = 'published', published_at = datetime('now'),
-       updated_at = datetime('now') WHERE id = ?`
-    ).bind(id)
-  ];
-  if (current.offer_id) {
-    statements.push(
-      env.DB.prepare(
-        "UPDATE offers SET status = 'active', updated_at = datetime('now') WHERE id = ?"
-      ).bind(current.offer_id)
-    );
+  const readiness = await inspectFunnelReadiness(env, id);
+  if (!readiness) return errorResponse(404, "NOT_FOUND", "Funil não encontrado.");
+  if (!readiness.ready) {
+    return errorResponse(409, readiness.code, readiness.message, readiness.details);
   }
-  statements.push(audit(env, user.id, "funnel.published", "funnel", id));
-  await env.DB.batch(statements);
-  return json({ ok: true });
+  const publication = await prepareFunnelPublication(env, user, id, readiness);
+  await env.DB.batch([
+    ...publication.statements,
+    audit(env, user.id, "funnel.published", "funnel", id, {
+      linkedPages: readiness.pageIds.length
+    })
+  ]);
+  return json({ ok: true, linkedPages: readiness.pageIds.length });
 }
 
 async function deleteFunnel(env: Env, user: SessionUser, id: string): Promise<Response> {
@@ -539,7 +980,9 @@ async function duplicateFunnel(env: Env, user: SessionUser, id: string): Promise
     nodes: graph.nodes.map((node) => {
       const nodeId = randomId();
       nodeMap.set(node.id, nodeId);
-      return { ...node, id: nodeId };
+      const config = { ...(node.config ?? {}) };
+      delete config.pageId;
+      return { ...node, id: nodeId, config };
     }),
     edges: graph.edges.map((edge) => ({
       ...edge,
@@ -581,8 +1024,12 @@ async function createPage(
   const id = randomId();
   const name = requiredString(body.name, "Nome");
   const slug = slugify(optionalString(body.slug, 80) ?? name) || `pagina-${id.slice(0, 6)}`;
-  const funnelId = optionalString(body.funnelId, 100);
-  const offerId = optionalString(body.offerId, 100);
+  const relationship = await resolvePageRelationship(
+    env,
+    optionalString(body.offerId, 100),
+    optionalString(body.funnelId, 100)
+  );
+  const { funnelId, offerId } = relationship;
   const pageType = optionalString(body.pageType, 40) ?? "sales";
   let content = DEFAULT_DOCUMENT;
   if (body.templateId) {
@@ -592,6 +1039,12 @@ async function createPage(
     if (template) content = safeJson<PageDocument>(template.content_json, DEFAULT_DOCUMENT);
   }
   if (body.content) content = validateDocument(body.content);
+  const graphStatements = await preparePageGraphChange(
+    env,
+    { id, name, pageType },
+    null,
+    funnelId
+  );
   await env.DB.batch([
     env.DB.prepare(
       `INSERT INTO pages(id, funnel_id, offer_id, name, slug, page_type, created_by)
@@ -600,6 +1053,7 @@ async function createPage(
     env.DB.prepare(
       `INSERT INTO page_drafts(page_id, content_json, updated_by) VALUES (?, ?, ?)`
     ).bind(id, JSON.stringify(content), user.id),
+    ...graphStatements,
     audit(env, user.id, "page.created", "page", id)
   ]);
   const row = (await listPages(env, null)).find((item) => item.id === id)!;
@@ -619,15 +1073,26 @@ async function updatePage(
      LEFT JOIN offers o ON o.id = p.offer_id LEFT JOIN page_drafts d ON d.page_id = p.id
      WHERE p.id = ?`
   ).bind(id).first<PageRow>();
+  const hasOfferId = Object.prototype.hasOwnProperty.call(body, "offerId");
+  const hasFunnelId = Object.prototype.hasOwnProperty.call(body, "funnelId");
+  const requestedOfferId = hasOfferId ? optionalString(body.offerId, 100) : current?.offer_id ?? null;
+  const requestedFunnelId = hasFunnelId ? optionalString(body.funnelId, 100) : current?.funnel_id ?? null;
+  const relationship = await resolvePageRelationship(env, requestedOfferId, requestedFunnelId);
+  const relationshipChanged = current !== null && (
+    relationship.offerId !== current.offer_id || relationship.funnelId !== current.funnel_id
+  );
   if (!current) return errorResponse(404, "NOT_FOUND", "Página não encontrada.");
   const name = body.name === undefined ? current.name : requiredString(body.name, "Nome");
   const slug =
     body.slug === undefined ? current.slug : slugify(requiredString(body.slug, "Slug", 80));
-  const status = validateStatus(
+  const requestedStatus = validateStatus(
     body.status,
     ["draft", "published", "archived"],
     current.status
   );
+  const status = relationshipChanged && requestedStatus === "published"
+    ? "draft"
+    : requestedStatus;
   const content =
     body.content === undefined
       ? safeJson<PageDocument>(current.content_json, DEFAULT_DOCUMENT)
@@ -640,16 +1105,42 @@ async function updatePage(
       "Esta página foi alterada em outra sessão. Recarregue antes de salvar."
     );
   }
-  await env.DB.batch([
+  const graphStatements = relationshipChanged || hasFunnelId
+    ? await preparePageGraphChange(
+        env,
+        { id, name, pageType: current.page_type },
+        current.funnel_id,
+        relationship.funnelId
+      )
+    : [];
+  const statements: D1PreparedStatement[] = [
     env.DB.prepare(
-      `UPDATE pages SET name = ?, slug = ?, status = ?, updated_at = datetime('now') WHERE id = ?`
-    ).bind(name, slug, status, id),
-    env.DB.prepare(
-      `UPDATE page_drafts SET content_json = ?, revision = revision + 1,
-       updated_by = ?, updated_at = datetime('now') WHERE page_id = ?`
-    ).bind(JSON.stringify(content), user.id, id),
-    audit(env, user.id, "page.saved", "page", id)
-  ]);
+      `UPDATE pages SET name = ?, slug = ?, status = ?, offer_id = ?, funnel_id = ?,
+       published_version_id = CASE WHEN ? = 1 THEN NULL ELSE published_version_id END,
+       published_at = CASE WHEN ? = 1 THEN NULL ELSE published_at END,
+       updated_at = datetime('now') WHERE id = ?`
+    ).bind(
+      name,
+      slug,
+      status,
+      relationship.offerId,
+      relationship.funnelId,
+      relationshipChanged ? 1 : 0,
+      relationshipChanged ? 1 : 0,
+      id
+    ),
+    ...graphStatements
+  ];
+  if (body.content !== undefined) {
+    statements.push(
+      env.DB.prepare(
+        `UPDATE page_drafts SET content_json = ?, revision = revision + 1,
+         updated_by = ?, updated_at = datetime('now') WHERE page_id = ?`
+      ).bind(JSON.stringify(content), user.id, id)
+    );
+  }
+  statements.push(audit(env, user.id, "page.saved", "page", id));
+  await env.DB.batch(statements);
   const row = (await listPages(env, null)).find((item) => item.id === id)!;
   return json({ page: mapPage(row, origin) });
 }
@@ -676,36 +1167,54 @@ async function publishPage(
       "Vincule a página a uma oferta antes de publicar."
     );
   }
-  const nextVersion =
-    (await env.DB.prepare(
-      "SELECT COALESCE(MAX(version_number), 0) + 1 AS value FROM page_versions WHERE page_id = ?"
-    ).bind(id).first<number>("value")) ?? 1;
-  const versionId = randomId();
-  const statements: D1PreparedStatement[] = [
-    env.DB.prepare(
-      `INSERT INTO page_versions(id, page_id, version_number, content_json, created_by)
-       VALUES (?, ?, ?, ?, ?)`
-    ).bind(versionId, id, nextVersion, current.content_json, user.id),
-    env.DB.prepare(
-      `UPDATE pages SET status = 'published', published_version_id = ?, published_at = datetime('now'),
-       updated_at = datetime('now') WHERE id = ?`
-    ).bind(versionId, id),
-    env.DB.prepare(
-      "UPDATE offers SET status = 'active', updated_at = datetime('now') WHERE id = ?"
-    ).bind(current.offer_id)
-  ];
+  const publishedFunnel = Boolean(
+    current.funnel_id && current.funnel_status !== "published"
+  );
+  let nextVersion: number;
+  let statements: D1PreparedStatement[];
+  let linkedPagesPublished = 1;
   if (current.funnel_id) {
-    statements.push(
-      env.DB.prepare(
-        `UPDATE funnels SET status = 'published', published_at = COALESCE(published_at, datetime('now')),
-         updated_at = datetime('now') WHERE id = ?`
-      ).bind(current.funnel_id)
+    const readiness = await inspectFunnelReadiness(env, current.funnel_id);
+    if (!readiness) {
+      return errorResponse(409, "FUNNEL_MISSING", "O funil vinculado não existe mais.");
+    }
+    if (!readiness.ready) {
+      return errorResponse(409, readiness.code, readiness.message, readiness.details);
+    }
+    const publication = await prepareFunnelPublication(
+      env,
+      user,
+      current.funnel_id,
+      readiness
     );
+    nextVersion = publication.versionNumbers.get(id) ?? 1;
+    statements = publication.statements;
+    linkedPagesPublished = readiness.pageIds.length;
+  } else {
+    nextVersion =
+      (await env.DB.prepare(
+        "SELECT COALESCE(MAX(version_number), 0) + 1 AS value FROM page_versions WHERE page_id = ?"
+      ).bind(id).first<number>("value")) ?? 1;
+    const versionId = randomId();
+    statements = [
+      env.DB.prepare(
+        `INSERT INTO page_versions(id, page_id, version_number, content_json, created_by)
+         VALUES (?, ?, ?, ?, ?)`
+      ).bind(versionId, id, nextVersion, current.content_json, user.id),
+      env.DB.prepare(
+        `UPDATE pages SET status = 'published', published_version_id = ?,
+         published_at = datetime('now'), updated_at = datetime('now') WHERE id = ?`
+      ).bind(versionId, id),
+      env.DB.prepare(
+        "UPDATE offers SET status = 'active', updated_at = datetime('now') WHERE id = ?"
+      ).bind(current.offer_id)
+    ];
   }
   statements.push(audit(env, user.id, "page.published", "page", id, {
     version: nextVersion,
     activatedOffer: current.offer_status !== "active",
-    publishedFunnel: Boolean(current.funnel_id && current.funnel_status !== "published")
+    publishedFunnel,
+    linkedPagesPublished
   }));
   await env.DB.batch(statements);
   const row = (await listPages(env, null)).find((item) => item.id === id)!;
@@ -723,16 +1232,31 @@ async function publishPage(
     live: true,
     publicUrl: page.publicUrl,
     activatedOffer: current.offer_status !== "active",
-    publishedFunnel: Boolean(current.funnel_id && current.funnel_status !== "published")
+    publishedFunnel
   });
 }
 
 async function deletePage(env: Env, user: SessionUser, id: string): Promise<Response> {
-  const current = await env.DB.prepare("SELECT id, name, status FROM pages WHERE id = ?")
+  const current = await env.DB.prepare(
+    "SELECT id, name, status, page_type, funnel_id FROM pages WHERE id = ?"
+  )
     .bind(id)
-    .first<{ id: string; name: string; status: string }>();
+    .first<{
+      id: string;
+      name: string;
+      status: string;
+      page_type: string;
+      funnel_id: string | null;
+    }>();
   if (!current) return errorResponse(404, "NOT_FOUND", "Página não encontrada.");
+  const graphStatements = await preparePageGraphChange(
+    env,
+    { id, name: current.name, pageType: current.page_type },
+    current.funnel_id,
+    null
+  );
   await env.DB.batch([
+    ...graphStatements,
     env.DB.prepare("DELETE FROM pages WHERE id = ?").bind(id),
     audit(env, user.id, "page.deleted", "page", id, {
       name: current.name,

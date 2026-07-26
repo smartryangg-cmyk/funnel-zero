@@ -43,6 +43,7 @@ export interface SessionUser {
 }
 
 export interface DashboardMetrics {
+  scopeOfferId: string | null;
   activeOffers: number;
   publishedFunnels: number;
   pageViews: number;
@@ -155,12 +156,22 @@ export interface FunnelSummary {
   updatedAt: string;
 }
 
+export type FunnelNodeType = "page" | "vsl" | "lead" | "checkout";
+
+export interface FunnelNodeConfig {
+  pageId?: string;
+  assetId?: string;
+  url?: string;
+  ctaLabel?: string;
+  [key: string]: unknown;
+}
+
 export interface FunnelGraphNode {
   id: string;
-  type: string;
+  type: FunnelNodeType;
   label: string;
   position: { x: number; y: number };
-  config?: Record<string, unknown>;
+  config?: FunnelNodeConfig;
 }
 
 export interface FunnelGraphEdge {
@@ -174,6 +185,81 @@ export interface FunnelGraph {
   version: number;
   nodes: FunnelGraphNode[];
   edges: FunnelGraphEdge[];
+}
+
+export interface FunnelGraphInspection {
+  pageIds: string[];
+  duplicateNodeIds: string[];
+  duplicatePageIds: string[];
+  invalidEdgeIds: string[];
+  disconnectedNodeIds: string[];
+  unlinkedContentNodeIds: string[];
+}
+
+/**
+ * Pure graph inspection shared by the editor, API validation and tests.
+ * Incomplete graphs are valid drafts, but every issue reported here blocks publication.
+ */
+export function inspectFunnelGraph(graph: FunnelGraph): FunnelGraphInspection {
+  const nodeIds = new Set<string>();
+  const duplicateNodeIds = new Set<string>();
+  for (const node of graph.nodes) {
+    if (nodeIds.has(node.id)) duplicateNodeIds.add(node.id);
+    nodeIds.add(node.id);
+  }
+
+  const pageIds: string[] = [];
+  const seenPageIds = new Set<string>();
+  const duplicatePageIds = new Set<string>();
+  const unlinkedContentNodeIds: string[] = [];
+  for (const node of graph.nodes) {
+    const pageId = typeof node.config?.pageId === "string" ? node.config.pageId.trim() : "";
+    if (pageId) {
+      pageIds.push(pageId);
+      if (seenPageIds.has(pageId)) duplicatePageIds.add(pageId);
+      seenPageIds.add(pageId);
+    } else if (node.type !== "checkout") {
+      unlinkedContentNodeIds.push(node.id);
+    }
+  }
+
+  const invalidEdgeIds = graph.edges
+    .filter((edge) =>
+      !nodeIds.has(edge.source)
+      || !nodeIds.has(edge.target)
+      || edge.source === edge.target
+    )
+    .map((edge) => edge.id);
+
+  const adjacent = new Map<string, Set<string>>();
+  for (const node of graph.nodes) adjacent.set(node.id, new Set());
+  for (const edge of graph.edges) {
+    if (!nodeIds.has(edge.source) || !nodeIds.has(edge.target) || edge.source === edge.target) continue;
+    adjacent.get(edge.source)?.add(edge.target);
+    adjacent.get(edge.target)?.add(edge.source);
+  }
+  const visited = new Set<string>();
+  const firstId = graph.nodes[0]?.id;
+  if (firstId) {
+    const queue = [firstId];
+    while (queue.length) {
+      const current = queue.shift()!;
+      if (visited.has(current)) continue;
+      visited.add(current);
+      for (const next of adjacent.get(current) ?? []) {
+        if (!visited.has(next)) queue.push(next);
+      }
+    }
+  }
+
+  return {
+    pageIds,
+    duplicateNodeIds: [...duplicateNodeIds],
+    duplicatePageIds: [...duplicatePageIds],
+    invalidEdgeIds,
+    disconnectedNodeIds: graph.nodes.filter((node) => !visited.has(node.id)).map((node) => node.id),
+    unlinkedContentNodeIds
+  };
 }
 
 export type PageBlockType =

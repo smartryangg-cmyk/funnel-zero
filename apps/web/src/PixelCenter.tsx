@@ -4,6 +4,7 @@ import { api } from "./api";
 import { Notice, PageHeader } from "./ui";
 
 export function PixelCenter() {
+  const requestedOfferId = new URLSearchParams(location.search).get("offer") ?? "";
   const [settings, setSettings] = useState<IntegrationSettings | null>(null);
   const [offerId, setOfferId] = useState("");
   const [mode, setMode] = useState<"pixel" | "capi" | "ga4">("pixel");
@@ -24,10 +25,22 @@ export function PixelCenter() {
     api.integrations()
       .then((result) => {
         setSettings(result);
-        setOfferId(result.offers[0]?.id ?? "");
+        setOfferId(
+          result.offers.some((offer) => offer.id === requestedOfferId)
+            ? requestedOfferId
+            : result.offers[0]?.id ?? ""
+        );
       })
       .catch((caught: unknown) => setMessage(caught instanceof Error ? caught.message : "Falha ao carregar integrações."));
-  }, []);
+  }, [requestedOfferId]);
+
+  function selectOffer(nextOfferId: string) {
+    setOfferId(nextOfferId);
+    const nextUrl = new URL(location.href);
+    if (nextOfferId) nextUrl.searchParams.set("offer", nextOfferId);
+    else nextUrl.searchParams.delete("offer");
+    history.replaceState({}, "", `${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`);
+  }
 
   const selected = useMemo(
     () => settings?.offers.find((offer) => offer.id === offerId) ?? null,
@@ -108,7 +121,7 @@ export function PixelCenter() {
       {message && <Notice tone={/salva|detectado|aceito/.test(message) ? "success" : "warning"}>{message}</Notice>}
       <section className="tracking-layout">
         <article className="panel tracking-form">
-          <label className="field"><span>Oferta</span><select value={offerId} onChange={(event) => setOfferId(event.target.value)}><option value="">Escolha uma oferta</option>{settings?.offers.map((offer) => <option key={offer.id} value={offer.id}>{offer.name}</option>)}</select></label>
+          <label className="field"><span>Oferta</span><select value={offerId} onChange={(event) => selectOffer(event.target.value)}><option value="">Escolha uma oferta</option>{settings?.offers.map((offer) => <option key={offer.id} value={offer.id}>{offer.name}</option>)}</select></label>
           <div className="tracking-tabs">
             <button className={mode === "pixel" ? "active" : ""} onClick={() => setMode("pixel")}>Meta Pixel</button>
             <button className={mode === "capi" ? "active" : ""} onClick={() => setMode("capi")}>Meta CAPI</button>

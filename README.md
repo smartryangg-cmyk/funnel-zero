@@ -44,6 +44,8 @@ Git, Node.js, Wrangler ou Docker.
 1. Baixe pelo link direto [`KRANO-Installer-Windows-x64.exe`](https://raw.githubusercontent.com/smartryangg-cmyk/funnel-zero/main/installers/KRANO-Installer-Windows-x64.exe).
 2. Dê dois cliques e acompanhe as instruções.
 3. Autorize sua conta na página oficial da Cloudflare quando o navegador abrir.
+4. Ao final, o instalador abre automaticamente o cadastro inicial no navegador e
+   salva o endereço de continuação em `KRANO/.funnel-zero/setup-url.txt`.
 
 O arquivo correto tem aproximadamente **6,7 MB**. Se o download tiver apenas
 alguns KB, ele é uma página HTML do GitHub e não deve ser executado. Os hashes
@@ -63,6 +65,9 @@ Os binários baixam o código deste repositório, preparam uma versão portátil
 Node.js quando necessário, verificam seu SHA-256 e iniciam o instalador guiado.
 Como o projeto é open source e os binários ainda não usam certificado comercial
 de assinatura, o Windows pode exibir o aviso padrão do SmartScreen.
+Cada execução também grava um log local com tokens temporários removidos em
+`KRANO/.funnel-zero/installer.log`. Releases versionadas publicam os dois
+executáveis e `SHA256SUMS.txt` como assets verificáveis no GitHub.
 
 Para desenvolvimento ou sistemas diferentes, os instaladores antigos continuam
 disponíveis: `INSTALAR-KRANO.cmd`, `install.sh` e `node install.mjs`.
@@ -80,6 +85,17 @@ O instalador:
 9. grava `SESSION_SECRET` como secret remoto;
 10. gera uma URL administrativa de uso único;
 11. salva apenas dados não secretos em `.funnel-zero/installation.json`.
+
+Se o proprietário perder a senha, execute dentro da pasta instalada:
+
+```bash
+node packages/cli/bin/funnel-zero.mjs recover
+```
+
+O comando confirma a conta Cloudflare, aplica as migrations pendentes e abre
+`/reset-password?token=...`. O link fica apenas no terminal e em
+`.funnel-zero/recovery-url.txt`, expira em 30 minutos e funciona uma única vez.
+Nenhum serviço de e-mail ou token fictício é usado nesse modo de emergência.
 
 Executar o instalador novamente reutiliza os recursos do mesmo nome. Ele não exclui nem altera recursos sem o prefixo e o manifesto da instalação.
 
@@ -163,6 +179,11 @@ Workers Static Assets usa `run_worker_first` apenas para `/api/*` e rotas privad
 - mutações exigem mesma origem;
 - cookies administrativos não ficam em `localStorage`;
 - login é limitado por identidade pseudonimizada;
+- falhas de login são limpas após autenticação válida e respostas de bloqueio
+  informam o tempo de espera;
+- recuperação local usa token aleatório armazenado somente como hash, invalida
+  todas as sessões e mantém um único proprietário ativo;
+- mutações respeitam os papéis proprietário, administrador, editor e analista;
 - queries usam statements preparados;
 - respostas privadas usam `Cache-Control: no-store`;
 - páginas privadas passam pelo Worker antes dos assets;

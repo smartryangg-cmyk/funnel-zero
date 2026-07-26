@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"archive/zip"
 	"bufio"
+	"bytes"
 	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
@@ -13,9 +14,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -23,14 +26,23 @@ import (
 )
 
 const (
-	appVersion = "0.2.0"
-	repository = "smartryangg-cmyk/funnel-zero"
+	appVersion   = "0.2.0"
+	repository   = "smartryangg-cmyk/funnel-zero"
+	resultPrefix = "KRANO_RESULT_JSON:"
 )
 
 type nodeRelease struct {
 	Version string          `json:"version"`
 	LTS     json.RawMessage `json:"lts"`
 	Files   []string        `json:"files"`
+}
+
+type cliResult struct {
+	OK           bool   `json:"ok"`
+	Action       string `json:"action"`
+	URL          string `json:"url"`
+	RecoveryFile string `json:"recoveryFile"`
+	Version      string `json:"version"`
 }
 
 func main() {
@@ -89,14 +101,39 @@ func main() {
 	}
 
 	fmt.Println("[3/4] Preparando dependências e infraestrutura…")
-	if err := runProjectInstaller(resolvedTarget, nodePath, flag.Args()); err != nil {
+	result, logPath, err := runProjectInstaller(resolvedTarget, nodePath, flag.Args())
+	if err != nil {
+		if logPath != "" {
+			fmt.Printf("Log da tentativa: %s\n", logPath)
+		}
 		fatalf("a instalação da KRANO não foi concluída: %v", err)
+	}
+	if !result.OK || result.URL == "" {
+		fatal(errors.New("a instalação terminou sem devolver um endereço seguro para continuar"))
 	}
 
 	fmt.Println()
-	fmt.Println("[4/4] KRANO instalada com sucesso.")
+	if result.Action == "recovery" {
+		fmt.Println("[4/4] Recuperação preparada com sucesso.")
+	} else {
+		fmt.Println("[4/4] KRANO instalada com sucesso.")
+	}
 	fmt.Printf("Projeto local: %s\n", resolvedTarget)
+	fmt.Printf("Continuar no navegador: %s\n", result.URL)
+	if result.RecoveryFile != "" {
+		fmt.Printf("Cópia local do endereço: %s\n", result.RecoveryFile)
+	}
+	if logPath != "" {
+		fmt.Printf("Log da instalação: %s\n", logPath)
+	}
+	if err := openURL(result.URL); err != nil {
+		fmt.Printf("Não foi possível abrir o navegador automaticamente: %v\n", err)
+		fmt.Println("Copie o endereço acima e abra-o no navegador.")
+	} else {
+		fmt.Println("O navegador foi aberto automaticamente.")
+	}
 	fmt.Println("Guarde esta pasta. Ela contém o código da sua própria instalação.")
+	pauseIfExplorerLaunch()
 }
 
 func printHelp() {
@@ -111,7 +148,9 @@ Instala a KRANO em uma única execução. O instalador:
 
 Uso:
   KRANO-Installer-Windows-x64.exe
+  KRANO-Installer-Windows-x64.exe recover
   ./krano-installer-linux-x64
+  ./krano-installer-linux-x64 recover
 
 Opções:
   --target CAMINHO   escolhe a pasta de instalação
@@ -119,6 +158,9 @@ Opções:
   --dry-run          mostra o plano sem alterar arquivos
   --version          mostra a versão
   --help             mostra esta ajuda
+
+O comando recover cria um link local, temporário e de uso único para redefinir
+a senha do proprietário sem enviar credenciais a serviços externos.
 
 Não é necessário instalar Node.js, Git, Wrangler ou Docker manualmente.
 `, appVersion)
@@ -304,21 +346,142 @@ func nodeArch() (string, error) {
 	}
 }
 
-func runProjectInstaller(project, nodePath string, args []string) error {
+func runProjectInstaller(project, nodePath string, args []string) (cliResult, string, error) {
 	installer := filepath.Join(project, "install.mjs")
 	if _, err := os.Stat(installer); err != nil {
-		return errors.New("install.mjs não foi encontrado no projeto")
+		return cliResult{}, "", errors.New("install.mjs não foi encontrado no projeto")
 	}
 	commandArgs := append([]string{installer}, args...)
 	command := exec.Command(nodePath, commandArgs...)
 	command.Dir = project
 	command.Stdin = os.Stdin
-	command.Stdout = os.Stdout
-	command.Stderr = os.Stderr
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	command.Stdout = io.MultiWriter(os.Stdout, &stdout)
+	command.Stderr = io.MultiWriter(os.Stderr, &stderr)
 	pathKey := "PATH"
 	nodeDir := filepath.Dir(nodePath)
 	command.Env = append(os.Environ(), pathKey+"="+nodeDir+string(os.PathListSeparator)+os.Getenv(pathKey))
-	return command.Run()
+	runErr := command.Run()
+	logPath, logErr := writeInstallerLog(project, stdout.String(), stderr.String())
+	if runErr != nil {
+		return cliResult{}, logPath, runErr
+	}
+	if logErr != nil {
+		fmt.Printf("Aviso: não foi possível gravar o log local: %v\n", logErr)
+	}
+	result, err := parseCLIResult(stdout.String())
+	if err != nil {
+		return cliResult{}, logPath, err
+	}
+	return result, logPath, nil
+}
+
+func parseCLIResult(output string) (cliResult, error) {
+	var raw string
+	scanner := bufio.NewScanner(strings.NewReader(output))
+	for scanner.Scan() {
+		line := scanner.Text()
+		if index := strings.Index(line, resultPrefix); index >= 0 {
+			raw = strings.TrimSpace(line[index+len(resultPrefix):])
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return cliResult{}, err
+	}
+	if raw == "" {
+		return cliResult{}, errors.New("o instalador local não devolveu o resultado final")
+	}
+	var result cliResult
+	if err := json.Unmarshal([]byte(raw), &result); err != nil {
+		return cliResult{}, errors.New("o instalador local devolveu um resultado inválido")
+	}
+	parsed, err := url.Parse(result.URL)
+	if err != nil || (parsed.Scheme != "https" && parsed.Scheme != "http") || parsed.Host == "" {
+		return cliResult{}, errors.New("o instalador local devolveu um endereço inválido")
+	}
+	return result, nil
+}
+
+func writeInstallerLog(project, stdout, stderr string) (string, error) {
+	stateDir := filepath.Join(project, ".funnel-zero")
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		return "", err
+	}
+	logPath := filepath.Join(stateDir, "installer.log")
+	file, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+	_, err = fmt.Fprintf(
+		file,
+		"\n[%s] KRANO Installer %s\n%s%s",
+		time.Now().UTC().Format(time.RFC3339),
+		appVersion,
+		redactSensitiveURLs(stdout),
+		redactSensitiveURLs(stderr),
+	)
+	return logPath, err
+}
+
+func redactSensitiveURLs(value string) string {
+	pattern := regexp.MustCompile(`(?i)([?&]token=)[A-Za-z0-9._~-]+`)
+	return pattern.ReplaceAllString(value, `${1}[REDACTED]`)
+}
+
+func openURL(rawURL string) error {
+	parsed, err := url.Parse(rawURL)
+	if err != nil || (parsed.Scheme != "https" && parsed.Scheme != "http") || parsed.Host == "" {
+		return errors.New("endereço inválido")
+	}
+	var command *exec.Cmd
+	switch runtime.GOOS {
+	case "windows":
+		command = exec.Command("rundll32", "url.dll,FileProtocolHandler", rawURL)
+	case "linux":
+		command = exec.Command("xdg-open", rawURL)
+	default:
+		return errors.New("abertura automática não suportada neste sistema")
+	}
+	if err := command.Start(); err != nil {
+		return err
+	}
+	return command.Process.Release()
+}
+
+func pauseIfExplorerLaunch() {
+	if !launchedFromExplorer() {
+		return
+	}
+	fmt.Println()
+	fmt.Print("Pressione Enter para fechar esta janela…")
+	_, _ = bufio.NewReader(os.Stdin).ReadString('\n')
+}
+
+func launchedFromExplorer() bool {
+	if runtime.GOOS != "windows" {
+		return false
+	}
+	if os.Getenv("CI") == "true" || os.Getenv("GITHUB_ACTIONS") == "true" || os.Getenv("KRANO_NO_PAUSE") == "1" {
+		return false
+	}
+	script := fmt.Sprintf(
+		"(Get-Process -Id %d -ErrorAction SilentlyContinue).ProcessName",
+		os.Getppid(),
+	)
+	output, err := exec.Command(
+		"powershell.exe",
+		"-NoLogo",
+		"-NoProfile",
+		"-NonInteractive",
+		"-Command",
+		script,
+	).Output()
+	if err != nil {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(string(output)), "explorer")
 }
 
 func nodeExecutable() string {
@@ -577,6 +740,7 @@ func fatal(err error) {
 	fmt.Fprintln(os.Stderr)
 	fmt.Fprintf(os.Stderr, "ERRO: %v\n", err)
 	fmt.Fprintln(os.Stderr, "Nada foi removido. Revise a conexão e execute o instalador novamente.")
+	pauseIfExplorerLaunch()
 	os.Exit(1)
 }
 

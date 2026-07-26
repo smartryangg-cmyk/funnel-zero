@@ -18,9 +18,10 @@ export function errorResponse(
   status: number,
   code: string,
   message: string,
-  details?: unknown
+  details?: unknown,
+  headers?: HeadersInit
 ): Response {
-  return json({ error: { code, message, details } }, { status });
+  return json({ error: { code, message, details } }, { status, headers });
 }
 
 export function withSecurityHeaders(response: Response): Response {

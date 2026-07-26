@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import type {
   DashboardMetrics,
   FunnelMetricStage,
+  OfferSummary,
   SessionUser
 } from "../../../packages/shared/src/schemas";
 import { api } from "./api";
@@ -14,20 +15,47 @@ const currency = new Intl.NumberFormat("pt-BR", {
 });
 
 export function Dashboard({ user }: { user: SessionUser }) {
+  const requestedOfferId = new URLSearchParams(location.search).get("offer") ?? "";
   const [days, setDays] = useState(7);
   const [view, setView] = useState<"summary" | "funnel" | "utms" | "events" | "reports">("summary");
   const [metrics, setMetrics] = useState<DashboardMetrics | null>(null);
+  const [offers, setOffers] = useState<OfferSummary[]>([]);
+  const [offerId, setOfferId] = useState(requestedOfferId);
   const [error, setError] = useState("");
+
+  useEffect(() => {
+    let active = true;
+    api.offers()
+      .then((result) => {
+        if (!active) return;
+        setOffers(result.offers);
+        if (requestedOfferId && !result.offers.some((offer) => offer.id === requestedOfferId)) {
+          setOfferId("");
+        }
+      })
+      .catch((caught: unknown) => {
+        if (active) setError(caught instanceof Error ? caught.message : "Falha ao carregar ofertas.");
+      });
+    return () => { active = false; };
+  }, [requestedOfferId]);
 
   useEffect(() => {
     let active = true;
     setMetrics(null);
     setError("");
-    api.dashboard(days)
+    api.dashboard(days, offerId || undefined)
       .then((result) => active && setMetrics(result.metrics))
       .catch((caught: unknown) => active && setError(caught instanceof Error ? caught.message : "Falha nas métricas."));
     return () => { active = false; };
-  }, [days]);
+  }, [days, offerId]);
+
+  function selectOffer(nextOfferId: string) {
+    setOfferId(nextOfferId);
+    const nextUrl = new URL(location.href);
+    if (nextOfferId) nextUrl.searchParams.set("offer", nextOfferId);
+    else nextUrl.searchParams.delete("offer");
+    history.replaceState({}, "", `${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`);
+  }
 
   const biggestLeak = useMemo(
     () => metrics?.funnelStages
@@ -53,7 +81,20 @@ export function Dashboard({ user }: { user: SessionUser }) {
             </button>
           ))}
         </div>
-        <span className="filter-hint">Dados reais desta instalação</span>
+        <label className="field compact">
+          <span>Oferta analisada</span>
+          <select value={offerId} onChange={(event) => selectOffer(event.target.value)}>
+            <option value="">Todas as ofertas</option>
+            {offers.map((offer) => (
+              <option key={offer.id} value={offer.id}>{offer.name}</option>
+            ))}
+          </select>
+        </label>
+        <span className="filter-hint">
+          {offerId
+            ? `Dados reais de ${offers.find((offer) => offer.id === offerId)?.name ?? "uma oferta"}`
+            : "Dados reais desta instalação"}
+        </span>
       </section>
       <nav className="analytics-tabs" aria-label="Áreas do dashboard">
         {([

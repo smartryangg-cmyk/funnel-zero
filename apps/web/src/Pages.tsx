@@ -1,4 +1,12 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type FormEvent
+} from "react";
 import {
   DndContext,
   PointerSensor,
@@ -16,6 +24,7 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import type {
   AssetSummary,
+  FunnelSummary,
   OfferSummary,
   PageBlock,
   PageBlockType,
@@ -28,29 +37,52 @@ import { api, ApiError } from "./api";
 import { Empty, Modal, Notice, PageHeader, StatusPill, navigate } from "./ui";
 
 export function Pages({ editorId }: { editorId?: string }) {
-  return editorId ? <PageEditor id={editorId} /> : <PageList />;
+  return editorId ? <PageEditor key={editorId} id={editorId} /> : <PageList />;
 }
 
 function PageList() {
+  const params = new URLSearchParams(location.search);
+  const requestedOfferId = params.get("offer") ?? "";
+  const requestedFunnelId = params.get("funnel") ?? "";
+  const shouldCreate = params.get("create") === "1";
   const [pages, setPages] = useState<PageSummary[]>([]);
   const [offers, setOffers] = useState<OfferSummary[]>([]);
+  const [funnels, setFunnels] = useState<FunnelSummary[]>([]);
   const [templates, setTemplates] = useState<TemplateSummary[]>([]);
-  const [creating, setCreating] = useState(false);
+  const [creating, setCreating] = useState(shouldCreate);
   const [deletingId, setDeletingId] = useState("");
   const [error, setError] = useState("");
   async function load() {
     try {
       const [pageResult, offerResult, templateResult] = await Promise.all([
-        api.pages(), api.offers(), api.templates()
+        api.pages(requestedOfferId || undefined),
+        api.offers(),
+        api.templates()
       ]);
+      const funnelResult = await api.funnels(requestedOfferId || undefined);
       setPages(pageResult.pages);
       setOffers(offerResult.offers);
+      setFunnels(funnelResult.funnels);
       setTemplates(templateResult.templates);
+      setError("");
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Falha ao carregar páginas.");
     }
   }
-  useEffect(() => { void load(); }, []);
+  // A troca de contexto pela URL mantém a central sincronizada com a oferta escolhida.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { void load(); }, [requestedOfferId]);
+  useEffect(() => {
+    if (shouldCreate) setCreating(true);
+  }, [shouldCreate, requestedOfferId, requestedFunnelId]);
+
+  function closeCreate() {
+    setCreating(false);
+    if (!shouldCreate) return;
+    const nextUrl = new URL(location.href);
+    nextUrl.searchParams.delete("create");
+    history.replaceState({}, "", `${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`);
+  }
   async function removePage(page: PageSummary) {
     if (!confirm(`Excluir a página "${page.name}"?\n\nO rascunho e todas as versões publicadas serão removidos permanentemente.`)) return;
     setDeletingId(page.id);
@@ -92,26 +124,84 @@ function PageList() {
           ))}
         </section>
       )}
-      {creating && <CreatePage offers={offers} templates={templates} onClose={() => setCreating(false)} onCreated={(id) => navigate(`/pages/${id}/edit`)} />}
+      {creating && (
+        <CreatePage
+          offers={offers}
+          funnels={funnels}
+          templates={templates}
+          initialOfferId={requestedOfferId}
+          initialFunnelId={requestedFunnelId}
+          onClose={closeCreate}
+          onCreated={(id) => navigate(`/pages/${id}/edit`)}
+        />
+      )}
     </>
   );
 }
 
 function CreatePage({
   offers,
+  funnels,
   templates,
+  initialOfferId,
+  initialFunnelId,
   onClose,
   onCreated
 }: {
   offers: OfferSummary[];
+  funnels: FunnelSummary[];
   templates: TemplateSummary[];
+  initialOfferId?: string;
+  initialFunnelId?: string;
   onClose: () => void;
   onCreated: (id: string) => void;
 }) {
   const [name, setName] = useState("");
-  const [offerId, setOfferId] = useState(offers[0]?.id ?? "");
+  const initialFunnel = funnels.find((funnel) => funnel.id === initialFunnelId);
+  const [offerId, setOfferId] = useState(
+    initialFunnel?.offerId ?? initialOfferId ?? offers[0]?.id ?? ""
+  );
+  const [funnelId, setFunnelId] = useState(initialFunnel?.id ?? "");
   const [templateId, setTemplateId] = useState(templates[0]?.id ?? "");
   const [error, setError] = useState("");
+  const initialContextApplied = useRef(false);
+  const availableFunnels = useMemo(
+    () => funnels.filter((funnel) => funnel.offerId === offerId),
+    [funnels, offerId]
+  );
+
+  useEffect(() => {
+    if (initialContextApplied.current) return;
+    const requestedFunnel = initialFunnelId
+      ? funnels.find((funnel) => funnel.id === initialFunnelId)
+      : undefined;
+    if (initialFunnelId && !requestedFunnel) return;
+    const requestedOffer =
+      requestedFunnel?.offerId ??
+      initialOfferId ??
+      offers[0]?.id;
+    if (!requestedOffer) return;
+    setOfferId(requestedOffer);
+    setFunnelId(requestedFunnel?.id ?? "");
+    initialContextApplied.current = true;
+  }, [funnels, initialFunnelId, initialOfferId, offers]);
+
+  useEffect(() => {
+    if (!templateId && templates[0]) setTemplateId(templates[0].id);
+  }, [templateId, templates]);
+
+  useEffect(() => {
+    if (funnelId && !availableFunnels.some((funnel) => funnel.id === funnelId)) {
+      setFunnelId("");
+    }
+  }, [availableFunnels, funnelId]);
+
+  function chooseOffer(nextOfferId: string) {
+    setOfferId(nextOfferId);
+    const matching = funnels.filter((funnel) => funnel.offerId === nextOfferId);
+    setFunnelId(matching.length === 1 ? matching[0].id : "");
+  }
+
   async function submit(event: FormEvent) {
     event.preventDefault();
     const template = templates.find((item) => item.id === templateId);
@@ -119,6 +209,7 @@ function CreatePage({
       const result = await api.createPage({
         name,
         offerId: offerId || null,
+        funnelId: funnelId || null,
         pageType: template?.category ?? "sales",
         templateId: templateId || undefined
       });
@@ -131,7 +222,19 @@ function CreatePage({
     <Modal title="Criar página" onClose={onClose}>
       <form className="form" onSubmit={(event) => void submit(event)}>
         <label className="field"><span>Nome</span><input required value={name} onChange={(event) => setName(event.target.value)} placeholder="Ex.: VSL principal" /></label>
-        <label className="field"><span>Oferta</span><select required value={offerId} onChange={(event) => setOfferId(event.target.value)}><option value="">Escolha</option>{offers.map((offer) => <option key={offer.id} value={offer.id}>{offer.name}</option>)}</select></label>
+        <label className="field"><span>Oferta</span><select required value={offerId} onChange={(event) => chooseOffer(event.target.value)}><option value="">Escolha</option>{offers.map((offer) => <option key={offer.id} value={offer.id}>{offer.name}</option>)}</select></label>
+        <label className="field">
+          <span>Etapa do funil</span>
+          <select value={funnelId} onChange={(event) => setFunnelId(event.target.value)}>
+            <option value="">Criar sem vincular a um funil</option>
+            {availableFunnels.map((funnel) => (
+              <option key={funnel.id} value={funnel.id}>{funnel.name}</option>
+            ))}
+          </select>
+          <small>
+            Ao escolher um funil, a página entra automaticamente em uma etapa livre do mapa.
+          </small>
+        </label>
         <div className="template-grid">
           {templates.map((template) => <button type="button" key={template.id} className={templateId === template.id ? "selected" : ""} onClick={() => setTemplateId(template.id)}><strong>{template.name}</strong><small>{template.category}</small></button>)}
         </div>
@@ -159,7 +262,11 @@ function PageEditor({ id }: { id: string }) {
   const hydrated = useRef(false);
   const lastSaved = useRef("");
   const publishingRef = useRef(false);
-  const pendingSave = useRef<Promise<{ page: PageSummary }> | null>(null);
+  const pageRef = useRef<PageSummary | null>(null);
+  const docRef = useRef<PageDocument | null>(null);
+  const queuedSnapshot = useRef<PageDocument | null>(null);
+  const saveLoop = useRef<Promise<PageSummary | null> | null>(null);
+  const autosaveTimer = useRef<number | null>(null);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
 
   async function load() {
@@ -168,7 +275,9 @@ function PageEditor({ id }: { id: string }) {
         api.page(id), api.assets(), api.pageVersions(id)
       ]);
       setPage(pageResult.page);
+      pageRef.current = pageResult.page;
       setDoc(pageResult.page.content);
+      docRef.current = pageResult.page.content;
       lastSaved.current = JSON.stringify(pageResult.page.content);
       setAssets(assetResult.assets.filter((asset) => asset.uploadStatus === "ready"));
       setVersions(versionResult.versions);
@@ -183,44 +292,108 @@ function PageEditor({ id }: { id: string }) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { hydrated.current = false; void load(); }, [id]);
 
-  async function persistDraft(snapshot: PageDocument, currentPage: PageSummary) {
-    setSaveState("Salvando…");
-    const request = api.updatePage(currentPage.id, {
-      content: snapshot,
-      revision: currentPage.revision
-    });
-    pendingSave.current = request;
-    try {
-      const result = await request;
-      setPage(result.page);
-      lastSaved.current = JSON.stringify(result.page.content);
-      setSaveState("Tudo salvo");
-      return result;
-    } finally {
-      if (pendingSave.current === request) pendingSave.current = null;
+  const queueDraft = useCallback((snapshot: PageDocument): Promise<PageSummary | null> => {
+    queuedSnapshot.current = structuredClone(snapshot);
+    if (saveLoop.current) return saveLoop.current;
+
+    const loop = (async () => {
+      let latestPage = pageRef.current;
+      while (queuedSnapshot.current) {
+        const next = queuedSnapshot.current;
+        queuedSnapshot.current = null;
+        const serialized = JSON.stringify(next);
+        if (serialized === lastSaved.current) continue;
+        const currentPage = pageRef.current;
+        if (!currentPage) return null;
+
+        setSaveState("Salvando…");
+        try {
+          const result = await api.updatePage(currentPage.id, {
+            content: next,
+            revision: currentPage.revision
+          });
+          pageRef.current = result.page;
+          latestPage = result.page;
+          setPage(result.page);
+          lastSaved.current = serialized;
+          setSaveState(
+            queuedSnapshot.current && JSON.stringify(queuedSnapshot.current) !== serialized
+              ? "Alterações não salvas"
+              : "Tudo salvo"
+          );
+        } catch (caught) {
+          // Mantém sempre o snapshot mais recente para uma nova tentativa manual ou automática.
+          queuedSnapshot.current ??= next;
+          setSaveState(
+            caught instanceof ApiError && caught.code === "REVISION_CONFLICT"
+              ? "Conflito: recarregue"
+              : "Falha ao salvar"
+          );
+          throw caught;
+        }
+      }
+      return latestPage;
+    })();
+    saveLoop.current = loop;
+    void loop.finally(() => {
+      if (saveLoop.current === loop) saveLoop.current = null;
+    }).catch(() => undefined);
+    return loop;
+  }, []);
+
+  async function flushDraft(snapshot = docRef.current): Promise<PageSummary | null> {
+    if (autosaveTimer.current !== null) {
+      window.clearTimeout(autosaveTimer.current);
+      autosaveTimer.current = null;
     }
+    if (snapshot && JSON.stringify(snapshot) !== lastSaved.current) {
+      return queueDraft(snapshot);
+    }
+    if (saveLoop.current) return saveLoop.current;
+    if (queuedSnapshot.current) return queueDraft(queuedSnapshot.current);
+    return pageRef.current;
   }
 
   useEffect(() => {
-    if (!hydrated.current || !doc || !page || publishingRef.current) return;
+    docRef.current = doc;
+    if (!hydrated.current || !doc || !pageRef.current || publishingRef.current) return;
     const serialized = JSON.stringify(doc);
     if (serialized === lastSaved.current) {
       setSaveState("Tudo salvo");
       return;
     }
     setSaveState("Alterações não salvas");
-    const timer = window.setTimeout(() => {
+    if (autosaveTimer.current !== null) window.clearTimeout(autosaveTimer.current);
+    autosaveTimer.current = window.setTimeout(() => {
+      autosaveTimer.current = null;
       if (publishingRef.current) return;
-      void (async () => {
-        try {
-          await persistDraft(doc, page);
-        } catch (caught) {
-          setSaveState(caught instanceof ApiError && caught.code === "REVISION_CONFLICT" ? "Conflito: recarregue" : "Falha ao salvar");
-        }
-      })();
-    }, 900);
-    return () => window.clearTimeout(timer);
-  }, [doc, page]);
+      void queueDraft(doc).catch(() => undefined);
+    }, 700);
+    return () => {
+      if (autosaveTimer.current !== null) {
+        window.clearTimeout(autosaveTimer.current);
+        autosaveTimer.current = null;
+      }
+    };
+  }, [doc, queueDraft]);
+
+  useEffect(() => {
+    function warnBeforeUnload(event: BeforeUnloadEvent) {
+      const current = docRef.current;
+      const dirty = current && JSON.stringify(current) !== lastSaved.current;
+      if (!dirty && !queuedSnapshot.current && !saveLoop.current) return;
+      event.preventDefault();
+      event.returnValue = "";
+    }
+    window.addEventListener("beforeunload", warnBeforeUnload);
+    return () => {
+      window.removeEventListener("beforeunload", warnBeforeUnload);
+      const current = docRef.current;
+      if (current && JSON.stringify(current) !== lastSaved.current) {
+        void queueDraft(current).catch(() => undefined);
+      }
+    };
+  }, [queueDraft]);
 
   function update(next: PageDocument, remember = true) {
     if (!doc) return;
@@ -311,13 +484,10 @@ function PageEditor({ id }: { id: string }) {
     setPublishedUrl("");
     try {
       setMessage("Publicando…");
-      let currentPage = page;
-      if (pendingSave.current) currentPage = (await pendingSave.current).page;
-      if (JSON.stringify(doc) !== lastSaved.current) {
-        await persistDraft(doc, currentPage);
-      }
+      await flushDraft(doc);
       const result = await api.publishPage(id);
       setPage(result.page);
+      pageRef.current = result.page;
       setVersions((await api.pageVersions(id)).versions);
       setPublishedUrl(result.publicUrl);
       setMessage(`Versão ${result.versionNumber} publicada e verificada no ar.`);
@@ -326,6 +496,10 @@ function PageEditor({ id }: { id: string }) {
     } finally {
       publishingRef.current = false;
       setPublishing(false);
+      const latest = docRef.current;
+      if (latest && JSON.stringify(latest) !== lastSaved.current) {
+        void queueDraft(latest).catch(() => undefined);
+      }
     }
   }
   async function removePage() {
@@ -341,7 +515,9 @@ function PageEditor({ id }: { id: string }) {
     if (!confirm("Restaurar esta versão para o rascunho atual?")) return;
     const result = await api.restorePageVersion(id, versionId);
     setPage(result.page);
+    pageRef.current = result.page;
     setDoc(result.page.content);
+    docRef.current = result.page.content;
     lastSaved.current = JSON.stringify(result.page.content);
     setMessage("Versão restaurada no rascunho.");
   }

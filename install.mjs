@@ -22,10 +22,11 @@ function run(command, args) {
 
 function printHelp() {
   console.log(`
-KRANO — instalador de etapa única
+KRANO 0.2.0 — instalador de etapa única
 
 Uso:
   node install.mjs
+  node install.mjs recover
 
 O instalador prepara as dependências, abre a autorização oficial da Cloudflare,
 cria ou reutiliza Worker, D1 e R2, aplica as migrations e entrega a URL do painel.
@@ -51,5 +52,8 @@ if (!existsSync(cliPath)) {
 
 console.log("\nKRANO");
 console.log("Preparando uma instalação limpa e reproduzível…\n");
-run(npmCommand, ["install", "--no-audit", "--no-fund"]);
-run(process.execPath, [cliPath, "setup", ...process.argv.slice(2)]);
+run(npmCommand, ["ci", "--no-audit", "--no-fund"]);
+const installerArgs = process.argv.slice(2);
+const requestedCommand = installerArgs[0] === "recover" ? "recover" : "setup";
+const forwardedArgs = requestedCommand === "recover" ? installerArgs.slice(1) : installerArgs;
+run(process.execPath, [cliPath, requestedCommand, ...forwardedArgs]);

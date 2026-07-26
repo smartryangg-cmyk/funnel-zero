@@ -1,10 +1,13 @@
 import type { SessionUser } from "../../../packages/shared/src/schemas";
 import { hmac, randomId, randomToken } from "./crypto";
+import { errorResponse } from "./http";
 
 const COOKIE_NAME = "__Host-funnel_zero_session";
+const LAST_SEEN_WRITE_INTERVAL_MS = 5 * 60 * 1000;
 
 interface UserRow extends SessionUser {
   disabled_at: string | null;
+  last_seen_at: string;
 }
 
 interface PasswordUserRow extends UserRow {
@@ -31,7 +34,7 @@ export async function getCurrentUser(
   if (!rawToken) return null;
   const tokenHash = await hmac(rawToken, env.SESSION_SECRET);
   const user = await env.DB.prepare(
-    `SELECT u.id, u.name, u.email, u.role, u.disabled_at
+    `SELECT u.id, u.name, u.email, u.role, u.disabled_at, s.last_seen_at
      FROM sessions s
      JOIN users u ON u.id = s.user_id
      WHERE s.token_hash = ?
@@ -43,9 +46,12 @@ export async function getCurrentUser(
     .bind(tokenHash)
     .first<UserRow>();
   if (!user || user.disabled_at) return null;
-  if (ctx) {
+  if (ctx && shouldRefreshLastSeen(user.last_seen_at)) {
     ctx.waitUntil(
-      env.DB.prepare("UPDATE sessions SET last_seen_at = datetime('now') WHERE token_hash = ?")
+      env.DB.prepare(
+        `UPDATE sessions SET last_seen_at = datetime('now')
+         WHERE token_hash = ? AND last_seen_at < datetime('now', '-5 minutes')`
+      )
         .bind(tokenHash)
         .run()
         .then(() => undefined)
@@ -123,4 +129,37 @@ export async function recordLoginAttempt(
   )
     .bind(randomId(), identityHash, succeeded ? 1 : 0)
     .run();
+}
+
+export async function clearLoginFailures(env: Env, identityHash: string): Promise<void> {
+  await env.DB.prepare(
+    "DELETE FROM login_attempts WHERE identity_hash = ? AND succeeded = 0"
+  )
+    .bind(identityHash)
+    .run();
+}
+
+export function hasAnyRole(
+  user: SessionUser,
+  allowed: readonly SessionUser["role"][]
+): boolean {
+  return allowed.includes(user.role);
+}
+
+export function requireRole(
+  user: SessionUser,
+  allowed: readonly SessionUser["role"][]
+): Response | null {
+  if (hasAnyRole(user, allowed)) return null;
+  return errorResponse(
+    403,
+    "FORBIDDEN",
+    "Sua função não possui permissão para concluir esta ação."
+  );
+}
+
+function shouldRefreshLastSeen(value: string): boolean {
+  const normalized = value.endsWith("Z") ? value : `${value.replace(" ", "T")}Z`;
+  const timestamp = Date.parse(normalized);
+  return !Number.isFinite(timestamp) || Date.now() - timestamp >= LAST_SEEN_WRITE_INTERVAL_MS;
 }

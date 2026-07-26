@@ -6,6 +6,7 @@ import type {
 import { DEFAULT_PLAYER_CONFIG, normalizePlayerConfig } from "./assets";
 import { randomId, randomToken } from "./crypto";
 import { escapeHtml, safeColor, safeJson } from "./platform";
+import { signPublicTrackingContext } from "./tracking";
 
 interface PublicPageRow {
   page_id: string;
@@ -314,8 +315,7 @@ function trackingScript(meta: Record<string, unknown>, nonce: string): string {
     const id = crypto.randomUUID();
     queue.push({
       id, type, occurredAt: new Date().toISOString(),
-      anonymousId: aid, offerId: meta.offerId, funnelId: meta.funnelId,
-      pageId: meta.pageId, variantId: meta.variantId, source: utm.utm_source || null,
+      source: utm.utm_source || null,
       campaign: utm.utm_campaign || null, utm, properties
     });
     if (window.fbq && pixelNames[type]) {
@@ -335,7 +335,10 @@ function trackingScript(meta: Record<string, unknown>, nonce: string): string {
   };
   const flush = () => {
     if (!queue.length) return;
-    const body = JSON.stringify({ events: queue.splice(0, 30) });
+    const body = JSON.stringify({
+      contextToken: meta.trackingToken,
+      events: queue.splice(0, 30)
+    });
     if (!navigator.sendBeacon('/api/public/events', new Blob([body], {type:'application/json'}))) {
       fetch('/api/public/events', {method:'POST', headers:{'Content-Type':'application/json'},
         body, keepalive:true, credentials:'same-origin'}).catch(() => {});
@@ -540,8 +543,7 @@ function trackingScript(meta: Record<string, unknown>, nonce: string): string {
         method:'POST', headers:{'Content-Type':'application/json'},
         body:JSON.stringify({name:data.get('name'), email:data.get('email'),
           whatsapp:data.get('whatsapp'),
-          consent:data.get('consent') === 'on', anonymousId:aid, offerId:meta.offerId,
-          funnelId:meta.funnelId, pageId:meta.pageId})
+          consent:data.get('consent') === 'on', contextToken:meta.trackingToken})
       });
       output.textContent = response.ok ? 'Recebido. Obrigado!' : 'Não foi possível enviar.';
       if (response.ok) { emit('lead_submit', {}, 'lead_submit'); form.reset(); }
@@ -724,12 +726,19 @@ export async function servePublicPage(
   const blocks = content.blocks
     .map((block) => renderBlock(block, page, pitchAtSeconds, playerProfiles))
     .join("\n");
-  const meta = {
+  const requestUrl = new URL(request.url);
+  const trackingToken = await signPublicTrackingContext(env.SESSION_SECRET, {
+    host: requestUrl.host.toLowerCase(),
+    path: requestUrl.pathname,
     anonymousId,
     offerId: page.offer_id,
     funnelId: page.funnel_id,
     pageId: page.page_id,
     variantId: variant.id
+  });
+  const meta = {
+    anonymousId,
+    trackingToken
   };
   const html = `<!doctype html>
 <html lang="pt-BR">

@@ -308,6 +308,8 @@ function AttachDomain({
 }
 
 export function Settings() {
+  const requestedOfferId = new URLSearchParams(location.search).get("offer") ?? "";
+  const requestedSection = location.hash.slice(1);
   const [settings, setSettings] = useState<IntegrationSettings | null>(null);
   const [funnels, setFunnels] = useState<FunnelSummary[]>([]);
   const [pages, setPages] = useState<PageSummary[]>([]);
@@ -328,20 +330,32 @@ export function Settings() {
       setSettings(integrations);
       setFunnels(funnelResult.funnels);
       setPages(pageResult.pages);
-      const selected = offerId || integrations.offers[0]?.id || "";
+      const selected = integrations.offers.some((offer) => offer.id === requestedOfferId)
+        ? requestedOfferId
+        : offerId || integrations.offers[0]?.id || "";
       setOfferId(selected);
       const offer = integrations.offers.find((item) => item.id === selected);
       setMetaPixelId(textValue(offer?.pixelConfig.metaPixelId));
       setGa4Id(textValue(offer?.pixelConfig.ga4Id));
-      setFunnelId(funnelResult.funnels[0]?.id ?? "");
-      setPageId(pageResult.pages[0]?.id ?? "");
+      const selectedFunnels = funnelResult.funnels.filter((funnel) => funnel.offerId === selected);
+      const selectedPages = pageResult.pages.filter((page) => page.offerId === selected);
+      setFunnelId((current) =>
+        selectedFunnels.some((funnel) => funnel.id === current)
+          ? current
+          : selectedFunnels[0]?.id ?? ""
+      );
+      setPageId((current) =>
+        selectedPages.some((page) => page.id === current)
+          ? current
+          : selectedPages[0]?.id ?? ""
+      );
     } catch (caught) {
       setMessage(caught instanceof Error ? caught.message : "Falha ao carregar integrações.");
     }
   }
-  // A carga inicial pertence ao ciclo de vida desta rota; as demais mutações chamam load explicitamente.
+  // A URL pode abrir diretamente uma oferta; as demais mutações chamam load explicitamente.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { void load(); }, []);
+  useEffect(() => { void load(); }, [requestedOfferId]);
   useEffect(() => {
     if (!settings) return;
     const offer = settings.offers.find((item) => item.id === offerId);
@@ -352,6 +366,53 @@ export function Settings() {
     if (!pageId) return setVersions([]);
     api.pageVersions(pageId).then((result) => setVersions(result.versions)).catch(() => setVersions([]));
   }, [pageId]);
+  useEffect(() => {
+    if (!settings || !requestedSection) return;
+    const timer = window.setTimeout(() => {
+      document.getElementById(requestedSection)?.scrollIntoView({
+        behavior: "smooth",
+        block: "center"
+      });
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [settings, requestedSection]);
+
+  const offerFunnels = funnels.filter((funnel) => funnel.offerId === offerId);
+  const funnelPages = pages.filter((page) =>
+    page.offerId === offerId && (!funnelId || page.funnelId === funnelId)
+  );
+  const offerCheckouts = settings?.checkouts.filter(
+    (checkout) => checkout.offerId === offerId
+  ) ?? [];
+  const offerFunnelIds = new Set(offerFunnels.map((funnel) => funnel.id));
+  const offerExperiments = settings?.experiments.filter(
+    (experiment) => offerFunnelIds.has(experiment.funnelId)
+  ) ?? [];
+
+  function selectOffer(nextOfferId: string) {
+    setOfferId(nextOfferId);
+    const matchingFunnels = funnels.filter((funnel) => funnel.offerId === nextOfferId);
+    const nextFunnelId = matchingFunnels[0]?.id ?? "";
+    setFunnelId(nextFunnelId);
+    setPageId(
+      pages.find((page) =>
+        page.offerId === nextOfferId && (!nextFunnelId || page.funnelId === nextFunnelId)
+      )?.id ?? ""
+    );
+    const nextUrl = new URL(location.href);
+    if (nextOfferId) nextUrl.searchParams.set("offer", nextOfferId);
+    else nextUrl.searchParams.delete("offer");
+    history.replaceState({}, "", `${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`);
+  }
+
+  function selectFunnel(nextFunnelId: string) {
+    setFunnelId(nextFunnelId);
+    setPageId(
+      pages.find((page) =>
+        page.offerId === offerId && (!nextFunnelId || page.funnelId === nextFunnelId)
+      )?.id ?? ""
+    );
+  }
 
   async function savePixels(event: FormEvent) {
     event.preventDefault();
@@ -388,14 +449,14 @@ export function Settings() {
       <PageHeader eyebrow="Configurações" title="Conecte só o necessário." subtitle="Checkout externo, pixels com diagnóstico, webhooks idempotentes e A/B indicativo." />
       {message && <Notice tone={message.includes("Falha") || message.includes("pelo menos") ? "warning" : "success"}>{message}</Notice>}
       <section className="settings-grid">
-        <article className="panel"><span className="eyebrow">PIXELS</span><h2>Meta e GA4</h2><form className="form" onSubmit={(event) => void savePixels(event)}><label className="field"><span>Oferta</span><select required value={offerId} onChange={(event) => setOfferId(event.target.value)}>{settings.offers.map((offer) => <option key={offer.id} value={offer.id}>{offer.name}</option>)}</select></label><label className="field"><span>Meta Pixel ID</span><input value={metaPixelId} onChange={(event) => setMetaPixelId(event.target.value)} placeholder="Somente números" /></label><label className="field"><span>GA4 Measurement ID</span><input value={ga4Id} onChange={(event) => setGa4Id(event.target.value.toUpperCase())} placeholder="G-XXXXXXXX" /></label><button className="button secondary">Validar e salvar</button></form></article>
-        <article className="panel"><span className="eyebrow">CHECKOUT EXTERNO</span><h2>Destino da oferta</h2><form className="form" onSubmit={(event) => void createCheckout(event)}><label className="field"><span>Nome</span><input required value={checkoutName} onChange={(event) => setCheckoutName(event.target.value)} /></label><label className="field"><span>URL HTTPS</span><input type="url" required value={checkoutUrl} onChange={(event) => setCheckoutUrl(event.target.value)} placeholder="https://…" /></label><button className="button secondary">Conectar checkout</button></form></article>
+        <article className="panel"><span className="eyebrow">PIXELS</span><h2>Meta e GA4</h2><form className="form" onSubmit={(event) => void savePixels(event)}><label className="field"><span>Oferta</span><select required value={offerId} onChange={(event) => selectOffer(event.target.value)}>{settings.offers.map((offer) => <option key={offer.id} value={offer.id}>{offer.name}</option>)}</select></label><label className="field"><span>Meta Pixel ID</span><input value={metaPixelId} onChange={(event) => setMetaPixelId(event.target.value)} placeholder="Somente números" /></label><label className="field"><span>GA4 Measurement ID</span><input value={ga4Id} onChange={(event) => setGa4Id(event.target.value.toUpperCase())} placeholder="G-XXXXXXXX" /></label><button className="button secondary">Validar e salvar</button></form></article>
+        <article className="panel" id="checkout"><span className="eyebrow">CHECKOUT EXTERNO</span><h2>Destino da oferta</h2><form className="form" onSubmit={(event) => void createCheckout(event)}><label className="field"><span>Nome</span><input required value={checkoutName} onChange={(event) => setCheckoutName(event.target.value)} /></label><label className="field"><span>URL HTTPS</span><input type="url" required value={checkoutUrl} onChange={(event) => setCheckoutUrl(event.target.value)} placeholder="https://…" /></label><button className="button secondary">Conectar checkout</button></form></article>
       </section>
       <section className="settings-grid">
-        <article className="panel"><div className="panel-header"><div><span className="eyebrow">WEBHOOKS</span><h2>Conversões</h2></div></div>{settings.checkouts.length ? <div className="table-list">{settings.checkouts.map((checkout) => <div key={checkout.id}><div><strong>{checkout.name}</strong><small>{checkout.checkoutUrl}</small></div><button onClick={() => void createWebhook(checkout.id)}>Gerar webhook</button></div>)}</div> : <Empty icon="↗" title="Conecte um checkout primeiro" text="O endpoint registra conversões por evento externo." />}{secret && <div className="secret-box"><strong>Copie agora</strong><label>URL<input readOnly value={secret.url} onFocus={(event) => event.currentTarget.select()} /></label><label>Secret<input readOnly value={secret.value} onFocus={(event) => event.currentTarget.select()} /></label><small>Envie no cabeçalho X-Funnel-Zero-Secret.</small></div>}</article>
-        <article className="panel"><span className="eyebrow">TESTE A/B</span><h2>Versões publicadas</h2><form className="form" onSubmit={(event) => void createExperiment(event)}><label className="field"><span>Funil</span><select value={funnelId} onChange={(event) => setFunnelId(event.target.value)}>{funnels.map((funnel) => <option key={funnel.id} value={funnel.id}>{funnel.name}</option>)}</select></label><label className="field"><span>Página</span><select value={pageId} onChange={(event) => setPageId(event.target.value)}>{pages.map((page) => <option key={page.id} value={page.id}>{page.name}</option>)}</select></label><p className="muted">{versions.length} versão(ões) publicada(s). As duas mais recentes serão A/B 50/50.</p><button className="button secondary" disabled={versions.length < 2}>Criar teste</button></form></article>
+        <article className="panel"><div className="panel-header"><div><span className="eyebrow">WEBHOOKS</span><h2>Conversões</h2></div></div>{offerCheckouts.length ? <div className="table-list">{offerCheckouts.map((checkout) => <div key={checkout.id}><div><strong>{checkout.name}</strong><small>{checkout.checkoutUrl}</small></div><button onClick={() => void createWebhook(checkout.id)}>Gerar webhook</button></div>)}</div> : <Empty icon="↗" title="Conecte um checkout primeiro" text="O endpoint registra conversões por evento externo." />}{secret && <div className="secret-box"><strong>Copie agora</strong><label>URL<input readOnly value={secret.url} onFocus={(event) => event.currentTarget.select()} /></label><label>Secret<input readOnly value={secret.value} onFocus={(event) => event.currentTarget.select()} /></label><small>Envie no cabeçalho X-Funnel-Zero-Secret.</small></div>}</article>
+        <article className="panel"><span className="eyebrow">TESTE A/B</span><h2>Versões publicadas</h2><form className="form" onSubmit={(event) => void createExperiment(event)}><label className="field"><span>Funil</span><select value={funnelId} onChange={(event) => selectFunnel(event.target.value)}>{offerFunnels.map((funnel) => <option key={funnel.id} value={funnel.id}>{funnel.name}</option>)}</select></label><label className="field"><span>Página</span><select value={pageId} onChange={(event) => setPageId(event.target.value)}>{funnelPages.map((page) => <option key={page.id} value={page.id}>{page.name}</option>)}</select></label><p className="muted">{versions.length} versão(ões) publicada(s). As duas mais recentes serão A/B 50/50.</p><button className="button secondary" disabled={versions.length < 2}>Criar teste</button></form></article>
       </section>
-      <section className="panel"><div className="panel-header"><div><span className="eyebrow">EXPERIMENTOS</span><h2>Leitura indicativa</h2></div><span className="muted">Amostra pequena não prova vencedor</span></div>{settings.experiments.length ? <div className="experiment-list">{settings.experiments.map((experiment) => <article key={experiment.id}><div><strong>{experiment.name}</strong><StatusPill status={experiment.status} /></div>{experiment.variants.map((variant) => <p key={variant.id}>{variant.name}: {variant.views} views · {variant.conversions} conversões</p>)}<button onClick={() => void toggleExperiment(experiment.id, experiment.status === "running" ? "paused" : "running")}>{experiment.status === "running" ? "Pausar" : "Iniciar"}</button></article>)}</div> : <Empty icon="A/B" title="Nenhum teste criado" text="Publique duas versões da mesma página para comparar." />}</section>
+      <section className="panel"><div className="panel-header"><div><span className="eyebrow">EXPERIMENTOS</span><h2>Leitura indicativa</h2></div><span className="muted">Amostra pequena não prova vencedor</span></div>{offerExperiments.length ? <div className="experiment-list">{offerExperiments.map((experiment) => <article key={experiment.id}><div><strong>{experiment.name}</strong><StatusPill status={experiment.status} /></div>{experiment.variants.map((variant) => <p key={variant.id}>{variant.name}: {variant.views} views · {variant.conversions} conversões</p>)}<button onClick={() => void toggleExperiment(experiment.id, experiment.status === "running" ? "paused" : "running")}>{experiment.status === "running" ? "Pausar" : "Iniciar"}</button></article>)}</div> : <Empty icon="A/B" title="Nenhum teste criado" text="Publique duas versões da mesma página para comparar." />}</section>
       <section className="panel danger-zone"><span className="eyebrow">OPERAÇÃO</span><h2>Backup, restauração e remoção</h2><p>Comandos locais possuem confirmação explícita e nunca incluem secrets:</p><div className="command-row"><code>npm run backup</code><code>npm run restore -- "pasta"</code><code>npm run uninstall</code></div></section>
     </>
   );

@@ -6,6 +6,7 @@ import {
   type SessionUser
 } from "../../../packages/shared/src/schemas";
 import {
+  clearLoginFailures,
   clearSessionCookie,
   createSession,
   findUserByEmail,
@@ -13,6 +14,7 @@ import {
   isRateLimited,
   loginRateKey,
   recordLoginAttempt,
+  requireRole,
   revokeSession
 } from "./auth";
 import { hashPassword, randomId, sha256, verifyPassword } from "./crypto";
@@ -41,9 +43,38 @@ interface SetupTokenRow {
   id: string;
 }
 
+interface RecoveryTokenRow {
+  user_id: string;
+}
+
 interface CountRow {
   count: number;
 }
+
+const APP_VERSION = "0.2.0";
+const PRIVATE_PAGE_PREFIXES = [
+  "/home",
+  "/dashboard",
+  "/integrations",
+  "/account",
+  "/hosting",
+  "/kratube",
+  "/player",
+  "/studio",
+  "/offers",
+  "/funnels",
+  "/pages",
+  "/media-library",
+  "/tracking",
+  "/domains",
+  "/subdomains",
+  "/studies",
+  "/settings"
+] as const;
+
+const EDIT_ROLES = ["owner", "admin", "editor"] as const;
+const ADMIN_ROLES = ["owner", "admin"] as const;
+const OWNER_ROLES = ["owner"] as const;
 
 async function isInstalled(env: Env): Promise<boolean> {
   const setting = await env.DB.prepare(
@@ -69,8 +100,14 @@ async function handleSetupComplete(request: Request, env: Env): Promise<Response
   }
   const tokenHash = await sha256(parsed.data.token);
   const setupToken = await env.DB.prepare(
-    `SELECT id FROM setup_tokens
-     WHERE token_hash = ? AND used_at IS NULL AND expires_at > datetime('now') LIMIT 1`
+    `UPDATE setup_tokens
+     SET used_at = datetime('now')
+     WHERE id = (
+       SELECT id FROM setup_tokens
+       WHERE token_hash = ? AND used_at IS NULL AND expires_at > datetime('now')
+       LIMIT 1
+     )
+     RETURNING id`
   )
     .bind(tokenHash)
     .first<SetupTokenRow>();
@@ -83,7 +120,7 @@ async function handleSetupComplete(request: Request, env: Env): Promise<Response
   const userId = randomId();
   const installedJson = JSON.stringify({
     installed: true,
-    version: "0.1.0",
+    version: APP_VERSION,
     installedAt: new Date().toISOString()
   });
   await env.DB.batch([
@@ -97,9 +134,6 @@ async function handleSetupComplete(request: Request, env: Env): Promise<Response
       password.hash,
       password.salt,
       password.iterations
-    ),
-    env.DB.prepare("UPDATE setup_tokens SET used_at = datetime('now') WHERE id = ?").bind(
-      setupToken.id
     ),
     env.DB.prepare(
       "UPDATE installation_settings SET value_json = ?, updated_at = datetime('now') WHERE key = 'installation'"
@@ -122,7 +156,13 @@ async function handleLogin(request: Request, env: Env): Promise<Response> {
 
   const identityHash = await loginRateKey(request, env, parsed.data.email);
   if (await isRateLimited(env, identityHash)) {
-    return errorResponse(429, "RATE_LIMITED", "Muitas tentativas. Aguarde 15 minutos.");
+    return errorResponse(
+      429,
+      "RATE_LIMITED",
+      "Muitas tentativas. Aguarde 15 minutos.",
+      undefined,
+      { "Retry-After": "900" }
+    );
   }
   const user = await findUserByEmail(env, parsed.data.email);
   const fallbackSalt = "AAAAAAAAAAAAAAAAAAAAAA";
@@ -140,6 +180,7 @@ async function handleLogin(request: Request, env: Env): Promise<Response> {
     return errorResponse(401, "INVALID_CREDENTIALS", "E-mail ou senha incorretos.");
   }
 
+  await clearLoginFailures(env, identityHash);
   const session = await createSession(request, env, user.id);
   await env.DB.batch([
     env.DB.prepare("UPDATE users SET last_login_at = datetime('now') WHERE id = ?").bind(user.id),
@@ -203,6 +244,164 @@ async function handleChangePassword(
   );
 }
 
+async function handleRecoveryComplete(request: Request, env: Env): Promise<Response> {
+  if (!requireSameOrigin(request)) {
+    return errorResponse(403, "ORIGIN_INVALID", "Origem inválida.");
+  }
+  const body = await readJson(request);
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return errorResponse(400, "VALIDATION_ERROR", "Revise o link e a nova senha.");
+  }
+  const input = body as Record<string, unknown>;
+  const token = typeof input.token === "string" ? input.token : "";
+  const password = setupSchema.shape.password.safeParse(input.password);
+  if (token.length < 32 || token.length > 256 || !password.success) {
+    return errorResponse(
+      400,
+      "VALIDATION_ERROR",
+      "Revise o link e os requisitos da nova senha.",
+      password.success ? undefined : password.error.flatten()
+    );
+  }
+
+  const tokenHash = await sha256(token);
+  const claimed = await env.DB.prepare(
+    `UPDATE password_recovery_tokens
+     SET used_at = datetime('now')
+     WHERE id = (
+       SELECT id FROM password_recovery_tokens
+       WHERE token_hash = ? AND used_at IS NULL AND expires_at > datetime('now')
+       LIMIT 1
+     )
+     RETURNING user_id`
+  )
+    .bind(tokenHash)
+    .first<RecoveryTokenRow>();
+  if (!claimed) {
+    return errorResponse(
+      403,
+      "RECOVERY_TOKEN_INVALID",
+      "Este link de recuperação é inválido, expirou ou já foi usado."
+    );
+  }
+
+  const nextPassword = await hashPassword(password.data);
+  await env.DB.batch([
+    env.DB.prepare(
+      `UPDATE users
+       SET password_hash = ?, password_salt = ?, password_iterations = ?,
+           updated_at = datetime('now')
+       WHERE id = ? AND disabled_at IS NULL`
+    ).bind(
+      nextPassword.hash,
+      nextPassword.salt,
+      nextPassword.iterations,
+      claimed.user_id
+    ),
+    env.DB.prepare(
+      "UPDATE sessions SET revoked_at = datetime('now') WHERE user_id = ? AND revoked_at IS NULL"
+    ).bind(claimed.user_id),
+    env.DB.prepare(
+      `UPDATE password_recovery_tokens SET used_at = datetime('now')
+       WHERE user_id = ? AND used_at IS NULL`
+    ).bind(claimed.user_id),
+    env.DB.prepare(
+      "INSERT INTO audit_logs(id, user_id, action, entity_type, entity_id) VALUES (?, ?, 'auth.password_recovered', 'user', ?)"
+    ).bind(randomId(), claimed.user_id, claimed.user_id)
+  ]);
+  return json(
+    { ok: true, requiresLogin: true },
+    { headers: { "Set-Cookie": clearSessionCookie() } }
+  );
+}
+
+async function handleChangeEmail(
+  request: Request,
+  env: Env,
+  user: SessionUser
+): Promise<Response> {
+  if (!requireSameOrigin(request)) {
+    return errorResponse(403, "ORIGIN_INVALID", "Origem inválida.");
+  }
+  const body = await readJson(request);
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return errorResponse(400, "VALIDATION_ERROR", "Revise o e-mail e a senha atual.");
+  }
+  const input = body as Record<string, unknown>;
+  const currentPassword =
+    typeof input.currentPassword === "string" ? input.currentPassword : "";
+  const email = loginSchema.shape.email.safeParse(input.email);
+  if (!currentPassword || currentPassword.length > 128 || !email.success) {
+    return errorResponse(400, "VALIDATION_ERROR", "Revise o e-mail e a senha atual.");
+  }
+  if (email.data === user.email.toLowerCase()) {
+    return errorResponse(400, "EMAIL_UNCHANGED", "Informe um e-mail diferente do atual.");
+  }
+
+  const passwordUser = await findUserByEmail(env, user.email);
+  const valid = passwordUser
+    ? await verifyPassword(
+        currentPassword,
+        passwordUser.password_salt,
+        passwordUser.password_iterations,
+        passwordUser.password_hash
+      )
+    : false;
+  if (!passwordUser || !valid) {
+    return errorResponse(401, "CURRENT_PASSWORD_INVALID", "A senha atual está incorreta.");
+  }
+  const existing = await findUserByEmail(env, email.data);
+  if (existing && existing.id !== user.id) {
+    return errorResponse(409, "EMAIL_ALREADY_USED", "Este e-mail já pertence a outra conta.");
+  }
+
+  await env.DB.batch([
+    env.DB.prepare(
+      "UPDATE users SET email = ?, updated_at = datetime('now') WHERE id = ?"
+    ).bind(email.data, user.id),
+    env.DB.prepare(
+      "UPDATE sessions SET revoked_at = datetime('now') WHERE user_id = ? AND revoked_at IS NULL"
+    ).bind(user.id),
+    env.DB.prepare(
+      "INSERT INTO audit_logs(id, user_id, action, entity_type, entity_id) VALUES (?, ?, 'auth.email_changed', 'user', ?)"
+    ).bind(randomId(), user.id, user.id)
+  ]);
+  return json(
+    { ok: true, requiresLogin: true },
+    { headers: { "Set-Cookie": clearSessionCookie() } }
+  );
+}
+
+function authorizeApiRequest(
+  request: Request,
+  user: SessionUser,
+  url: URL
+): Response | null {
+  if (request.method === "GET" || request.method === "HEAD") return null;
+  if (url.pathname.startsWith("/api/cloudflare/") || url.pathname.startsWith("/api/domains")) {
+    return requireRole(user, ADMIN_ROLES);
+  }
+  if (url.pathname.startsWith("/api/integrations")) {
+    return requireRole(user, ADMIN_ROLES);
+  }
+  if (
+    url.pathname.startsWith("/api/offers")
+    || url.pathname.startsWith("/api/funnels")
+    || url.pathname.startsWith("/api/pages")
+    || url.pathname.startsWith("/api/assets")
+    || url.pathname.startsWith("/api/experiments")
+  ) {
+    return requireRole(user, EDIT_ROLES);
+  }
+  return requireRole(user, ADMIN_ROLES);
+}
+
+export function isPrivatePagePath(pathname: string): boolean {
+  return PRIVATE_PAGE_PREFIXES.some(
+    (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`)
+  );
+}
+
 async function handleApi(
   request: Request,
   env: Env,
@@ -241,6 +440,10 @@ async function handleApi(
     return handleLogin(request, env);
   }
 
+  if (request.method === "POST" && url.pathname === "/api/auth/recovery/complete") {
+    return handleRecoveryComplete(request, env);
+  }
+
   if (request.method === "POST" && url.pathname === "/api/auth/logout") {
     if (!requireSameOrigin(request)) return errorResponse(403, "ORIGIN_INVALID", "Origem inválida.");
     await revokeSession(request, env);
@@ -261,11 +464,20 @@ async function handleApi(
   if (request.method === "POST" && url.pathname === "/api/account/password") {
     return handleChangePassword(request, env, user);
   }
+  if (request.method === "POST" && url.pathname === "/api/account/email") {
+    const forbidden = requireRole(user, OWNER_ROLES);
+    return forbidden ?? handleChangeEmail(request, env, user);
+  }
 
   if (request.method === "GET" && url.pathname === "/api/dashboard") {
     const period = Number(url.searchParams.get("days") ?? "7");
-    return json({ metrics: await readDashboard(env, period) });
+    return json({
+      metrics: await readDashboard(env, period, url.searchParams.get("offerId"))
+    });
   }
+
+  const forbidden = authorizeApiRequest(request, user, url);
+  if (forbidden) return forbidden;
 
   const catalogResponse = await handleCatalogApi(request, env, user, url);
   if (catalogResponse) return catalogResponse;
@@ -287,12 +499,7 @@ async function handlePage(
   ctx: ExecutionContext,
   url: URL
 ): Promise<Response> {
-  if (
-    url.pathname.startsWith("/home")
-    || url.pathname.startsWith("/dashboard")
-    || url.pathname.startsWith("/integrations")
-    || url.pathname.startsWith("/account")
-  ) {
+  if (isPrivatePagePath(url.pathname)) {
     const user = await getCurrentUser(request, env, ctx);
     if (!user) return Response.redirect(`${url.origin}/login`, 302);
   }
@@ -331,6 +538,9 @@ async function scheduled(env: Env): Promise<void> {
     env.DB.prepare("DELETE FROM sessions WHERE expires_at < datetime('now') OR revoked_at IS NOT NULL"),
     env.DB.prepare("DELETE FROM login_attempts WHERE created_at < datetime('now', '-1 day')"),
     env.DB.prepare("DELETE FROM setup_tokens WHERE expires_at < datetime('now') OR used_at IS NOT NULL"),
+    env.DB.prepare(
+      "DELETE FROM password_recovery_tokens WHERE expires_at < datetime('now') OR used_at IS NOT NULL"
+    ),
     env.DB.prepare(
       "DELETE FROM cloudflare_oauth_states WHERE expires_at < datetime('now') OR used_at IS NOT NULL"
     ),

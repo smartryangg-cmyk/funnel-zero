@@ -17,11 +17,22 @@ import {
   type NodeChange,
   type NodeProps
 } from "@xyflow/react";
-import type { FunnelGraphNode, FunnelSummary, OfferSummary } from "../../../packages/shared/src/schemas";
+import type {
+  FunnelGraphNode,
+  FunnelNodeConfig,
+  FunnelNodeType,
+  FunnelSummary,
+  OfferSummary,
+  PageSummary
+} from "../../../packages/shared/src/schemas";
 import { api } from "./api";
 import { Empty, Modal, Notice, PageHeader, StatusPill, navigate } from "./ui";
 
-type FlowNode = Node<{ label: string; kind: string }>;
+type FlowNode = Node<{
+  label: string;
+  kind: FunnelNodeType;
+  config: FunnelNodeConfig;
+}>;
 
 const nodeTypes = { funnelStep: FunnelNode };
 
@@ -147,18 +158,32 @@ function FunnelBuilder({ id }: { id: string }) {
   const [funnel, setFunnel] = useState<FunnelSummary | null>(null);
   const [nodes, setNodes] = useState<FlowNode[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
+  const [pages, setPages] = useState<PageSummary[]>([]);
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
   const fitViewOptions = useMemo(() => ({ padding: 0.25 }), []);
 
   useEffect(() => {
-    api.funnel(id).then(({ funnel: value }) => {
+    api.funnel(id).then(async ({ funnel: value }) => {
+      const pageResult = await api.pages(value.offerId ?? undefined);
       setFunnel(value);
+      setPages(
+        value.offerId
+          ? pageResult.pages.filter((page) =>
+              page.offerId === value.offerId
+              && (!page.funnelId || page.funnelId === value.id)
+            )
+          : []
+      );
       setNodes(value.graph.nodes.map((node) => ({
         id: node.id,
         type: "funnelStep",
         position: node.position,
-        data: { label: node.label, kind: node.type }
+        data: {
+          label: node.label,
+          kind: node.type,
+          config: structuredClone(node.config ?? {})
+        }
       })));
       setEdges(value.graph.edges.map((edge) => ({
         id: edge.id,
@@ -186,19 +211,31 @@ function FunnelBuilder({ id }: { id: string }) {
     }, current));
   }, []);
 
-  function addNode(kind: string, label: string) {
+  function addNode(kind: FunnelNodeType, label: string) {
     setNodes((current) => [...current, {
       id: crypto.randomUUID(),
       type: "funnelStep",
       position: { x: 100 + current.length * 270, y: 120 + (current.length % 2) * 120 },
-      data: { label, kind }
+      data: { label, kind, config: {} }
     }]);
   }
 
   function duplicateSelected() {
     const selected = nodes.find((node) => node.selected);
     if (!selected) return setMessage("Selecione uma etapa para duplicar.");
-    setNodes((current) => [...current, { ...selected, id: crypto.randomUUID(), selected: false, position: { x: selected.position.x + 40, y: selected.position.y + 80 } }]);
+    const config = structuredClone(selected.data.config);
+    delete config.pageId;
+    setNodes((current) => [...current, {
+      ...selected,
+      id: crypto.randomUUID(),
+      selected: false,
+      position: { x: selected.position.x + 40, y: selected.position.y + 80 },
+      data: {
+        ...selected.data,
+        label: `${selected.data.label} — cópia`,
+        config
+      }
+    }]);
   }
 
   function deleteSelected() {
@@ -220,15 +257,19 @@ function FunnelBuilder({ id }: { id: string }) {
         type: node.data.kind,
         label: node.data.label,
         position: node.position,
-        config: {}
+        config: structuredClone(node.data.config)
       })),
       edges: edges.map((edge) => ({ id: edge.id, source: edge.source, target: edge.target, label: typeof edge.label === "string" ? edge.label : undefined }))
     };
     try {
       const updated = await api.updateFunnel(id, { graph });
-      if (publish) await api.publishFunnel(id);
+      const publication = publish ? await api.publishFunnel(id) : null;
       setFunnel({ ...updated.funnel, status: publish ? "published" : updated.funnel.status });
-      setMessage(publish ? "Funil publicado." : "Mapa salvo.");
+      setMessage(
+        publication
+          ? `Funil e ${publication.linkedPages} página(s) publicados de verdade.`
+          : "Mapa salvo."
+      );
     } catch (caught) {
       setMessage(caught instanceof Error ? caught.message : "Falha ao salvar.");
     } finally {
@@ -246,6 +287,23 @@ function FunnelBuilder({ id }: { id: string }) {
       setMessage(caught instanceof Error ? caught.message : "Falha ao excluir funil.");
       setSaving(false);
     }
+  }
+
+  const selectedNode = nodes.find((node) => node.selected) ?? null;
+  const usedPageIds = new Set(
+    nodes
+      .filter((node) => node.id !== selectedNode?.id)
+      .map((node) => node.data.config.pageId)
+      .filter((pageId): pageId is string => Boolean(pageId))
+  );
+
+  function updateSelectedNode(
+    transform: (data: FlowNode["data"]) => FlowNode["data"]
+  ) {
+    if (!selectedNode) return;
+    setNodes((current) => current.map((node) =>
+      node.id === selectedNode.id ? { ...node, data: transform(node.data) } : node
+    ));
   }
 
   if (!funnel) return <div className="panel skeleton tall" />;
@@ -267,6 +325,87 @@ function FunnelBuilder({ id }: { id: string }) {
         <button className="danger-text" onClick={deleteSelected}>Excluir</button>
       </div>
       {message && <Notice tone={message.includes("salvo") || message.includes("publicado") ? "success" : "warning"}>{message}</Notice>}
+      <section className="panel builder-step-editor">
+        {selectedNode ? (
+          <>
+            <div className="panel-header">
+              <div>
+                <span className="eyebrow">ETAPA SELECIONADA</span>
+                <h2>Conteúdo e destino</h2>
+              </div>
+              <StatusPill status={selectedNode.data.config.pageId || selectedNode.data.config.url ? "active" : "pending"} />
+            </div>
+            <div className="settings-grid">
+              <label className="field">
+                <span>Nome da etapa</span>
+                <input
+                  value={selectedNode.data.label}
+                  onChange={(event) => updateSelectedNode((data) => ({
+                    ...data,
+                    label: event.target.value
+                  }))}
+                />
+              </label>
+              {selectedNode.data.kind === "checkout" ? (
+                <label className="field">
+                  <span>URL do checkout</span>
+                  <input
+                    type="url"
+                    value={selectedNode.data.config.url ?? ""}
+                    onChange={(event) => updateSelectedNode((data) => ({
+                      ...data,
+                      config: { ...data.config, url: event.target.value }
+                    }))}
+                    placeholder="Usa o checkout da oferta quando vazio"
+                  />
+                </label>
+              ) : (
+                <label className="field">
+                  <span>Página desta etapa</span>
+                  <select
+                    value={selectedNode.data.config.pageId ?? ""}
+                    onChange={(event) => updateSelectedNode((data) => ({
+                      ...data,
+                      config: {
+                        ...data.config,
+                        pageId: event.target.value || undefined
+                      }
+                    }))}
+                  >
+                    <option value="">Escolha uma página</option>
+                    {pages.map((page) => (
+                      <option
+                        key={page.id}
+                        value={page.id}
+                        disabled={usedPageIds.has(page.id)}
+                      >
+                        {page.name}{usedPageIds.has(page.id) ? " · já utilizada" : ""}
+                      </option>
+                    ))}
+                  </select>
+                  <small>Cada página pode ocupar somente uma etapa deste funil.</small>
+                </label>
+              )}
+            </div>
+            {selectedNode.data.kind !== "checkout" && (
+              <button
+                className="button secondary"
+                onClick={() => navigate(
+                  `/pages?offer=${funnel.offerId ?? ""}&funnel=${funnel.id}&create=1`
+                )}
+              >
+                + Criar página para este funil
+              </button>
+            )}
+          </>
+        ) : (
+          <Empty
+            icon="⇢"
+            title="Selecione uma etapa do mapa"
+            text="Depois escolha a página correspondente ou configure o destino do checkout."
+          />
+        )}
+      </section>
       <section className="flow-canvas">
         <ReactFlow
           nodes={nodes}

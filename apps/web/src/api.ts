@@ -87,8 +87,21 @@ export const api = {
       method: "POST",
       body: JSON.stringify(input)
     }),
-  dashboard: (days: number) =>
-    request<{ metrics: DashboardMetrics }>(`/api/dashboard?days=${days}`),
+  completeRecovery: (input: { token: string; password: string }) =>
+    request<{ ok: true; requiresLogin: true }>("/api/auth/recovery/complete", {
+      method: "POST",
+      body: JSON.stringify(input)
+    }),
+  changeEmail: (input: { currentPassword: string; email: string }) =>
+    request<{ ok: true; requiresLogin: true; email: string }>("/api/account/email", {
+      method: "POST",
+      body: JSON.stringify(input)
+    }),
+  dashboard: (days: number, offerId?: string) => {
+    const params = new URLSearchParams({ days: String(days) });
+    if (offerId) params.set("offerId", offerId);
+    return request<{ metrics: DashboardMetrics }>(`/api/dashboard?${params.toString()}`);
+  },
   offers: () => request<{ offers: OfferSummary[] }>("/api/offers"),
   createOffer: (input: { name: string; slug?: string; checkoutUrl?: string }) =>
     request<{ offer: OfferSummary }>("/api/offers", {
@@ -121,7 +134,10 @@ export const api = {
       body: JSON.stringify(input)
     }),
   publishFunnel: (id: string) =>
-    request<{ ok: true }>(`/api/funnels/${id}/publish`, { method: "POST", body: "{}" }),
+    request<{ ok: true; linkedPages: number }>(`/api/funnels/${id}/publish`, {
+      method: "POST",
+      body: "{}"
+    }),
   duplicateFunnel: (id: string) =>
     request<{ funnel: FunnelSummary }>(`/api/funnels/${id}/duplicate`, {
       method: "POST",

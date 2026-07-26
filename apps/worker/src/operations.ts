@@ -62,6 +62,18 @@ interface VariantRow {
   conversions: number;
 }
 
+const PURCHASE_WEBHOOK_STATUSES = new Set([
+  "paid",
+  "approved",
+  "completed",
+  "purchase"
+]);
+
+export function isPurchaseWebhookStatus(value: unknown): boolean {
+  return typeof value === "string" &&
+    PURCHASE_WEBHOOK_STATUSES.has(value.trim().toLowerCase());
+}
+
 async function readIntegrations(env: Env, origin: string) {
   const [offers, checkouts, webhooks, experiments, variants, customScripts, metaSecrets] = await Promise.all([
     env.DB.prepare(
@@ -444,8 +456,15 @@ export async function handleWebhook(
   const provided = request.headers.get("X-Funnel-Zero-Secret") ?? "";
   const actual = await sha256(provided);
   const encoder = new TextEncoder();
-  if (!crypto.subtle.timingSafeEqual(encoder.encode(actual), encoder.encode(row.secret_hash))) {
+  const subtle = crypto.subtle as SubtleCrypto & {
+    timingSafeEqual(a: ArrayBuffer | ArrayBufferView, b: ArrayBuffer | ArrayBufferView): boolean;
+  };
+  if (!subtle.timingSafeEqual(encoder.encode(actual), encoder.encode(row.secret_hash))) {
     return errorResponse(401, "INVALID_SECRET", "Assinatura inválida.");
+  }
+  const declaredLength = Number(request.headers.get("Content-Length") ?? 0);
+  if (Number.isFinite(declaredLength) && declaredLength > 256_000) {
+    return errorResponse(413, "PAYLOAD_TOO_LARGE", "Evento muito grande.");
   }
   const raw = await request.text();
   if (new TextEncoder().encode(raw).byteLength > 256_000) {
@@ -457,24 +476,19 @@ export async function handleWebhook(
   } catch {
     return errorResponse(400, "INVALID_BODY", "JSON inválido.");
   }
+  const payloadHash = await sha256(raw);
   const externalId =
     optionalString(payload.id, 160) ??
     optionalString(payload.eventId, 160) ??
     optionalString(payload.transactionId, 160) ??
-    randomId();
-  const existing = await env.DB.prepare(
-    "SELECT id FROM webhook_events WHERE webhook_id = ? AND external_event_id = ?"
-  ).bind(row.id, externalId).first<{ id: string }>();
-  if (existing) return json({ ok: true, duplicate: true });
-  const payloadHash = await sha256(raw);
+    payloadHash;
   const rawStatus = payload.status ?? payload.event ?? payload.type;
-  const statusText = typeof rawStatus === "string" ? rawStatus.toLowerCase() : "";
-  const purchase = /(paid|approved|purchase|completed)/.test(statusText);
+  const purchase = isPurchaseWebhookStatus(rawStatus);
   const anonymousId =
     optionalString(payload.fz_aid, 100) ?? optionalString(payload.anonymousId, 100);
   const statements: D1PreparedStatement[] = [
     env.DB.prepare(
-      `INSERT INTO webhook_events(id, webhook_id, external_event_id, payload_hash, status)
+      `INSERT OR IGNORE INTO webhook_events(id, webhook_id, external_event_id, payload_hash, status)
        VALUES (?, ?, ?, ?, 'accepted')`
     ).bind(randomId(), row.id, externalId, payloadHash),
     env.DB.prepare(
@@ -484,7 +498,7 @@ export async function handleWebhook(
   if (purchase) {
     statements.push(
       env.DB.prepare(
-        `INSERT INTO tracking_events(
+        `INSERT OR IGNORE INTO tracking_events(
           id, occurred_at, event_type, anonymous_id, offer_id, properties_json, dedupe_key
          ) VALUES (?, ?, 'purchase', ?, ?, ?, ?)`
       ).bind(
@@ -500,6 +514,9 @@ export async function handleWebhook(
       )
     );
   }
-  await env.DB.batch(statements);
-  return json({ ok: true, purchaseRecorded: purchase });
+  const results = await env.DB.batch(statements);
+  const duplicate = Number(results[0]?.meta.changes ?? 0) === 0;
+  const purchaseRecorded =
+    purchase && Number(results[results.length - 1]?.meta.changes ?? 0) > 0;
+  return json({ ok: true, duplicate, purchaseRecorded });
 }

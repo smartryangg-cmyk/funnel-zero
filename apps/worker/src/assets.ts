@@ -35,6 +35,60 @@ interface AssetRow {
 interface PartRow {
   part_number: number;
   etag: string;
+  byte_size: number;
+}
+
+export interface MultipartPartDescriptor {
+  partNumber: number;
+  byteSize: number;
+}
+
+export type MultipartValidationResult =
+  | { ok: true; totalBytes: number }
+  | {
+      ok: false;
+      totalBytes: number;
+      code: "EMPTY" | "SEQUENCE" | "PART_SIZE" | "TOTAL_SIZE";
+    };
+
+const MAX_MULTIPART_PART_BYTES = 16 * 1024 * 1024;
+const MIN_NON_FINAL_PART_BYTES = 5 * 1024 * 1024;
+
+export function validateMultipartParts(
+  declaredBytes: number,
+  parts: MultipartPartDescriptor[],
+  maxFileBytes: number
+): MultipartValidationResult {
+  if (!parts.length) return { ok: false, totalBytes: 0, code: "EMPTY" };
+  let totalBytes = 0;
+  for (let index = 0; index < parts.length; index += 1) {
+    const part = parts[index];
+    if (part.partNumber !== index + 1) {
+      return { ok: false, totalBytes, code: "SEQUENCE" };
+    }
+    const finalPart = index === parts.length - 1;
+    if (
+      !Number.isSafeInteger(part.byteSize) ||
+      part.byteSize <= 0 ||
+      part.byteSize > MAX_MULTIPART_PART_BYTES ||
+      (!finalPart && part.byteSize < MIN_NON_FINAL_PART_BYTES)
+    ) {
+      return { ok: false, totalBytes, code: "PART_SIZE" };
+    }
+    totalBytes += part.byteSize;
+    if (!Number.isSafeInteger(totalBytes) || totalBytes > maxFileBytes) {
+      return { ok: false, totalBytes, code: "TOTAL_SIZE" };
+    }
+  }
+  if (
+    !Number.isSafeInteger(declaredBytes) ||
+    declaredBytes <= 0 ||
+    declaredBytes > maxFileBytes ||
+    totalBytes !== declaredBytes
+  ) {
+    return { ok: false, totalBytes, code: "TOTAL_SIZE" };
+  }
+  return { ok: true, totalBytes };
 }
 
 export const DEFAULT_PLAYER_CONFIG: PlayerConfig = {
@@ -234,18 +288,7 @@ async function initiate(
   if (!allowed) {
     throw new ValidationError("Formato permitido: MP4, WebM, JPG, PNG, WebP, GIF ou PDF.");
   }
-  const used =
-    (await env.DB.prepare(
-      "SELECT COALESCE(SUM(byte_size), 0) AS value FROM assets WHERE upload_status = 'ready' AND deleted_at IS NULL"
-    ).first<number>("value")) ?? 0;
   const maxStorage = Number(env.MAX_STORAGE_BYTES) || 10_737_418_240;
-  if (env.FREE_ONLY === "true" && used + byteSize > maxStorage) {
-    return errorResponse(
-      409,
-      "FREE_ONLY_STORAGE_LIMIT",
-      "Este upload ultrapassaria o limite de proteção configurado."
-    );
-  }
   const id = randomId();
   const extension = (originalName.split(".").pop() ?? "bin").toLowerCase().slice(0, 12);
   const objectKey = `assets/${new Date().toISOString().slice(0, 10)}/${id}-${sanitizeFileName(originalName)}`;
@@ -253,12 +296,19 @@ async function initiate(
     httpMetadata: { contentType: mime },
     customMetadata: { assetId: id, originalName: sanitizeFileName(originalName) }
   });
-  await env.DB.batch([
-    env.DB.prepare(
+  let inserted: D1Result<unknown>;
+  try {
+    inserted = await env.DB.prepare(
       `INSERT INTO assets(
         id, offer_id, object_key, original_name, media_type, mime_type, extension,
         byte_size, sha256, upload_status, multipart_upload_id, created_by
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'uploading', ?, ?)`
+       )
+       SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, 'uploading', ?, ?
+       WHERE ? <> 'true' OR (
+         SELECT COALESCE(SUM(byte_size), 0)
+         FROM assets
+         WHERE upload_status IN ('ready', 'uploading') AND deleted_at IS NULL
+       ) + ? <= ?`
     ).bind(
       id,
       optionalString(body.offerId, 100),
@@ -270,10 +320,32 @@ async function initiate(
       byteSize,
       optionalString(body.sha256, 128),
       multipart.uploadId,
-      user.id
-    ),
-    audit(env, user.id, "asset.upload_started", "asset", id, { byteSize, mime })
-  ]);
+      user.id,
+      env.FREE_ONLY,
+      byteSize,
+      maxStorage
+    ).run();
+  } catch (error) {
+    try {
+      await multipart.abort();
+    } catch {
+      // A rotina agendada também limpa uploads órfãos caso o provedor já os tenha removido.
+    }
+    throw error;
+  }
+  if (!inserted.meta.changes) {
+    try {
+      await multipart.abort();
+    } catch {
+      // A ausência do upload remoto não altera a recusa atômica da reserva.
+    }
+    return errorResponse(
+      409,
+      "FREE_ONLY_STORAGE_LIMIT",
+      "Este upload ultrapassaria o limite de proteção configurado."
+    );
+  }
+  await audit(env, user.id, "asset.upload_started", "asset", id, { byteSize, mime }).run();
   return json(
     {
       assetId: id,
@@ -299,7 +371,7 @@ async function uploadPart(
     throw new ValidationError("Número da parte inválido.");
   }
   const length = Number(request.headers.get("Content-Length") ?? 0);
-  if (length <= 0 || length > 16 * 1024 * 1024) {
+  if (length <= 0 || length > MAX_MULTIPART_PART_BYTES) {
     throw new ValidationError("Parte vazia ou maior que 16 MB.");
   }
   if (!request.body) throw new ValidationError("Parte vazia.");
@@ -314,26 +386,123 @@ async function uploadPart(
   return json({ partNumber, etag: uploaded.etag });
 }
 
+async function reservedBytesExcluding(env: Env, assetId: string): Promise<number> {
+  return (await env.DB.prepare(
+    `SELECT COALESCE(SUM(byte_size), 0) AS value
+     FROM assets
+     WHERE upload_status IN ('ready', 'uploading')
+       AND deleted_at IS NULL
+       AND id <> ?`
+  ).bind(assetId).first<number>("value")) ?? 0;
+}
+
+async function invalidateMultipartUpload(
+  env: Env,
+  user: SessionUser,
+  asset: AssetRow,
+  reason: string
+): Promise<void> {
+  if (asset.multipart_upload_id) {
+    try {
+      await env.MEDIA.resumeMultipartUpload(
+        asset.object_key,
+        asset.multipart_upload_id
+      ).abort();
+    } catch {
+      // O upload pode já ter sido concluído; a exclusão abaixo cobre esse estado.
+    }
+  }
+  try {
+    await env.MEDIA.delete(asset.object_key);
+  } catch {
+    // A linha fica como failed e a limpeza agendada pode repetir a remoção.
+  }
+  await env.DB.batch([
+    env.DB.prepare(
+      `UPDATE assets
+       SET upload_status = 'failed', multipart_upload_id = NULL, updated_at = datetime('now')
+       WHERE id = ?`
+    ).bind(asset.id),
+    env.DB.prepare("DELETE FROM asset_upload_parts WHERE asset_id = ?").bind(asset.id),
+    audit(env, user.id, "asset.upload_rejected", "asset", asset.id, { reason })
+  ]);
+}
+
 async function complete(env: Env, user: SessionUser, id: string): Promise<Response> {
   const asset = await findAsset(env, id);
   if (!asset?.multipart_upload_id || asset.upload_status !== "uploading") {
     return errorResponse(404, "UPLOAD_NOT_FOUND", "Upload não encontrado ou já finalizado.");
   }
   const rows = await env.DB.prepare(
-    "SELECT part_number, etag FROM asset_upload_parts WHERE asset_id = ? ORDER BY part_number"
+    `SELECT part_number, etag, byte_size
+     FROM asset_upload_parts WHERE asset_id = ? ORDER BY part_number`
   ).bind(id).all<PartRow>();
-  if (!rows.results.length) throw new ValidationError("Nenhuma parte foi enviada.");
-  const upload = env.MEDIA.resumeMultipartUpload(asset.object_key, asset.multipart_upload_id);
-  const object = await upload.complete(
-    rows.results.map((part) => ({ partNumber: part.part_number, etag: part.etag }))
+  const maxFile = Number(env.MAX_FILE_BYTES) || 524_288_000;
+  const validation = validateMultipartParts(
+    Number(asset.byte_size),
+    rows.results.map((part) => ({
+      partNumber: Number(part.part_number),
+      byteSize: Number(part.byte_size)
+    })),
+    maxFile
   );
+  if (!validation.ok) {
+    await invalidateMultipartUpload(env, user, asset, validation.code);
+    return errorResponse(
+      409,
+      "UPLOAD_INTEGRITY_ERROR",
+      "As partes recebidas não correspondem ao arquivo reservado. Envie o arquivo novamente."
+    );
+  }
+  const maxStorage = Number(env.MAX_STORAGE_BYTES) || 10_737_418_240;
+  const reservedWithoutAsset = await reservedBytesExcluding(env, id);
+  if (
+    env.FREE_ONLY === "true" &&
+    reservedWithoutAsset + validation.totalBytes > maxStorage
+  ) {
+    await invalidateMultipartUpload(env, user, asset, "FREE_ONLY_STORAGE_LIMIT");
+    return errorResponse(
+      409,
+      "FREE_ONLY_STORAGE_LIMIT",
+      "A conclusão ultrapassaria o limite de proteção configurado."
+    );
+  }
+  const upload = env.MEDIA.resumeMultipartUpload(asset.object_key, asset.multipart_upload_id);
+  let object: R2Object;
+  try {
+    object = await upload.complete(
+      rows.results.map((part) => ({ partNumber: part.part_number, etag: part.etag }))
+    );
+  } catch {
+    await invalidateMultipartUpload(env, user, asset, "R2_COMPLETE_FAILED");
+    return errorResponse(
+      409,
+      "UPLOAD_COMPLETE_FAILED",
+      "A Cloudflare não confirmou todas as partes. Envie o arquivo novamente."
+    );
+  }
+  const actualSize = Number(object.size);
+  const storageAfterComplete = await reservedBytesExcluding(env, id);
+  if (
+    !Number.isSafeInteger(actualSize) ||
+    actualSize !== validation.totalBytes ||
+    actualSize > maxFile ||
+    (env.FREE_ONLY === "true" && storageAfterComplete + actualSize > maxStorage)
+  ) {
+    await invalidateMultipartUpload(env, user, asset, "R2_OBJECT_SIZE_MISMATCH");
+    return errorResponse(
+      409,
+      "UPLOAD_INTEGRITY_ERROR",
+      "O arquivo confirmado não corresponde ao tamanho reservado."
+    );
+  }
   await env.DB.batch([
     env.DB.prepare(
       `UPDATE assets SET upload_status = 'ready', byte_size = ?, multipart_upload_id = NULL,
        updated_at = datetime('now') WHERE id = ?`
-    ).bind(object.size, id),
+    ).bind(actualSize, id),
     env.DB.prepare("DELETE FROM asset_upload_parts WHERE asset_id = ?").bind(id),
-    audit(env, user.id, "asset.upload_completed", "asset", id, { byteSize: object.size })
+    audit(env, user.id, "asset.upload_completed", "asset", id, { byteSize: actualSize })
   ]);
   return json({ asset: mapAsset((await findAsset(env, id))!) });
 }
