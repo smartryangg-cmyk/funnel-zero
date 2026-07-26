@@ -11,6 +11,9 @@ import {
 } from "./auth";
 import { hashPassword, randomId, sha256, verifyPassword } from "./crypto";
 import { readDashboard } from "./dashboard";
+import { handleAssetsApi, serveMedia } from "./assets";
+import { handleCatalogApi } from "./catalog";
+import { handleDomainsApi } from "./domains";
 import {
   errorResponse,
   json,
@@ -19,6 +22,9 @@ import {
   requireSameOrigin,
   withSecurityHeaders
 } from "./http";
+import { handleOperationsApi, handleWebhook } from "./operations";
+import { servePublicPage } from "./public-page";
+import { handlePublicTrackingApi } from "./tracking";
 
 interface InstalledSetting {
   value_json: string;
@@ -184,6 +190,11 @@ async function handleApi(
     return json({ ok: true }, { headers: { "Set-Cookie": clearSessionCookie() } });
   }
 
+  const webhookResponse = await handleWebhook(request, env, url);
+  if (webhookResponse) return webhookResponse;
+  const publicTracking = await handlePublicTrackingApi(request, env, ctx, url);
+  if (publicTracking) return publicTracking;
+
   const user = await getCurrentUser(request, env, ctx);
   if (!user) return errorResponse(401, "UNAUTHORIZED", "Faça login para continuar.");
 
@@ -193,6 +204,15 @@ async function handleApi(
     const period = Number(url.searchParams.get("days") ?? "7");
     return json({ metrics: await readDashboard(env, period) });
   }
+
+  const catalogResponse = await handleCatalogApi(request, env, user, url);
+  if (catalogResponse) return catalogResponse;
+  const assetsResponse = await handleAssetsApi(request, env, user, url);
+  if (assetsResponse) return assetsResponse;
+  const operationsResponse = await handleOperationsApi(request, env, user, url);
+  if (operationsResponse) return operationsResponse;
+  const domainsResponse = await handleDomainsApi(request, env, user, url);
+  if (domainsResponse) return domainsResponse;
 
   return errorResponse(404, "NOT_FOUND", "Rota não encontrada.");
 }
@@ -226,14 +246,35 @@ async function scheduled(env: Env): Promise<void> {
       trackingDays = 90;
     }
   }
-  await env.DB.batch([
+  const abandoned = await env.DB.prepare(
+    `SELECT id, object_key, multipart_upload_id FROM assets
+     WHERE upload_status = 'uploading' AND multipart_upload_id IS NOT NULL
+       AND updated_at < datetime('now', '-1 day') LIMIT 100`
+  ).all<{ id: string; object_key: string; multipart_upload_id: string }>();
+  for (const asset of abandoned.results) {
+    try {
+      await env.MEDIA.resumeMultipartUpload(asset.object_key, asset.multipart_upload_id).abort();
+    } catch {
+      // O R2 também remove uploads multipart abandonados pela regra de ciclo de vida.
+    }
+  }
+  const statements = [
     env.DB.prepare("DELETE FROM sessions WHERE expires_at < datetime('now') OR revoked_at IS NOT NULL"),
     env.DB.prepare("DELETE FROM login_attempts WHERE created_at < datetime('now', '-1 day')"),
     env.DB.prepare("DELETE FROM setup_tokens WHERE expires_at < datetime('now') OR used_at IS NOT NULL"),
     env.DB.prepare("DELETE FROM tracking_events WHERE occurred_at < datetime('now', ?)").bind(
       `-${trackingDays} days`
+    ),
+    env.DB.prepare(
+      `UPDATE assets SET upload_status = 'failed', multipart_upload_id = NULL,
+       updated_at = datetime('now')
+       WHERE upload_status = 'uploading' AND updated_at < datetime('now', '-1 day')`
+    ),
+    env.DB.prepare(
+      "DELETE FROM asset_upload_parts WHERE asset_id IN (SELECT id FROM assets WHERE upload_status = 'failed')"
     )
-  ]);
+  ];
+  await env.DB.batch(statements);
 }
 
 export default {
@@ -241,6 +282,10 @@ export default {
     const url = new URL(request.url);
     try {
       if (url.pathname.startsWith("/api/")) return await handleApi(request, env, ctx, url);
+      if (url.pathname.startsWith("/media/")) return await serveMedia(request, env, url);
+      if (url.pathname === "/o" || url.pathname.startsWith("/o/")) {
+        return await servePublicPage(request, env, url);
+      }
       return await handlePage(request, env, ctx, url);
     } catch (error) {
       if (error instanceof RequestBodyError) {

@@ -5,4 +5,5 @@
  */
 interface Env {
   SESSION_SECRET: string;
+  CLOUDFLARE_API_TOKEN?: string;
 }

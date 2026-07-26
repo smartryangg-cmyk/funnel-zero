@@ -14,7 +14,7 @@ Não inclua senhas, cookies, tokens, dados pessoais ou dumps reais.
 
 ## Modelo de ameaça
 
-O Marco 1 considera:
+O MVP considera:
 
 - tentativa de assumir a configuração inicial;
 - brute force de login;
@@ -43,18 +43,16 @@ O Marco 1 considera:
 - operações de remoção restritas ao manifesto local;
 - logs estruturados sem corpo de requisição.
 
-## Revisões obrigatórias antes dos próximos marcos
+## Controles das funções avançadas
 
-Upload, HTML personalizado, webhooks e gestão de domínios ampliam a superfície de ataque. Antes de habilitá-los:
-
-- validar assinatura de arquivo e caminhos R2;
-- sanitizar HTML com allowlist;
-- separar scripts autorizados do conteúdo;
-- proteger multipart contra abuso e concorrência;
-- usar HMAC, nonce e janela temporal em webhooks;
-- impedir SSRF;
-- testar permissões mínimas da API Cloudflare;
-- garantir que variantes não vazem pelo cache.
+- mídia aceita allowlist de MIME, tamanho máximo, chaves geradas e hotlink de outra origem bloqueado;
+- multipart usa upload IDs privados, partes numeradas e limpeza de uploads abandonados;
+- HTML personalizado passa por allowlist restritiva e não executa scripts;
+- páginas públicas recebem CSP com nonce e não são armazenadas em cache durante atribuição A/B;
+- webhooks usam secret mostrado uma vez, hash SHA-256, comparação constante e chave de replay;
+- checkout aceita apenas HTTP/HTTPS e nunca é buscado pelo Worker;
+- domínios usam secret separado, API oficial, permissões mínimas e confirmação pelo hostname;
+- logs não armazenam payloads, tokens, IP completo ou senha.
 
 ## Atualizações
 

@@ -15,6 +15,13 @@
       "/login*",
       "/setup*",
       "/dashboard*",
+      "/offers*",
+      "/funnels*",
+      "/pages*",
+      "/media-library*",
+      "/domains*",
+      "/settings*",
+      "/o/*",
       "/media/*"
     ]
   },

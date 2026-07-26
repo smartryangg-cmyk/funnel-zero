@@ -17,13 +17,13 @@ export async function readDashboard(env: Env, periodDays: number): Promise<Dashb
       "SELECT COUNT(DISTINCT anonymous_id) AS value FROM tracking_events WHERE anonymous_id IS NOT NULL AND occurred_at > datetime('now', ?)"
     ).bind(since),
     env.DB.prepare(
-      "SELECT COUNT(*) AS value FROM tracking_events WHERE event_type = 'vsl_play' AND occurred_at > datetime('now', ?)"
+      "SELECT COUNT(*) AS value FROM tracking_events WHERE event_type = 'vsl_start' AND occurred_at > datetime('now', ?)"
     ).bind(since),
     env.DB.prepare(
       "SELECT COALESCE(AVG(CAST(json_extract(properties_json, '$.percent') AS REAL)), 0) AS value FROM tracking_events WHERE event_type = 'vsl_progress' AND occurred_at > datetime('now', ?)"
     ).bind(since),
     env.DB.prepare(
-      "SELECT COUNT(*) AS value FROM tracking_events WHERE event_type = 'vsl_pitch_reached' AND occurred_at > datetime('now', ?)"
+      "SELECT COUNT(*) AS value FROM tracking_events WHERE event_type = 'vsl_pitch' AND occurred_at > datetime('now', ?)"
     ).bind(since),
     env.DB.prepare(
       "SELECT COUNT(*) AS value FROM tracking_events WHERE event_type = 'checkout_click' AND occurred_at > datetime('now', ?)"

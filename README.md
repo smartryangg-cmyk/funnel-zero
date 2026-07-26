@@ -4,7 +4,7 @@
 
 Funnel Zero é uma plataforma open source e autohospedada para construir e analisar funis de vendas usando Cloudflare Workers, Workers Static Assets, D1 e R2. Cada instalação pertence à conta Cloudflare da própria pessoa.
 
-Este repositório está no **Marco 1 — Fundação funcional**: instalação idempotente, infraestrutura gratuita, onboarding administrativo, autenticação, dashboard inicial, schema completo e deploy executável. Os construtores de funis e páginas entram nos marcos seguintes sobre essa base.
+Este repositório contém o **MVP operacional completo**: instalação idempotente, painel administrativo, ofertas, mapa visual de funil, editor/publicação de páginas, biblioteca R2, player VSL, tracking, A/B, integrações e operação segura.
 
 ## Estado atual
 
@@ -16,6 +16,16 @@ Este repositório está no **Marco 1 — Fundação funcional**: instalação id
 - sessão opaca em cookie `HttpOnly`, `Secure` e `SameSite=Strict`;
 - rate limiting básico de login;
 - dashboard responsivo em português;
+- ofertas e funis com mapa horizontal em React Flow;
+- editor em blocos com drag-and-drop, autosave, undo/redo, preview e versões;
+- páginas públicas em `/o/:oferta/:pagina`;
+- upload multipart para R2, biblioteca e entrega HTTP Range;
+- player próprio de VSL com play, pausa, quartis, retenção, pitch e CTA;
+- tracking primário em lote, leads e conversões por webhook;
+- testes A/B com atribuição persistente e aviso de amostra;
+- Meta Pixel e GA4 por IDs validados;
+- checkout externo com UTMs e identificador anônimo;
+- domínios próprios por API opcional com confirmação textual;
 - modo `FREE_ONLY=true`;
 - limpeza agendada de sessões, tentativas e métricas antigas;
 - instalador local idempotente;
@@ -30,7 +40,7 @@ Pré-requisitos:
 - Node.js 20 ou superior;
 - conta Cloudflare;
 - autenticação local do Wrangler (`npx wrangler login`);
-- plano gratuito é suficiente para o Marco 1.
+- plano gratuito é suficiente para testar o MVP dentro das franquias atuais.
 
 ```bash
 git clone <repositorio>
@@ -115,11 +125,8 @@ apps/
 packages/
   cli/                  instalador local
   shared/               schemas compartilhados
-  editor/               reservado ao Marco 2
-  player/               reservado ao Marco 3
 migrations/             schema D1
 scripts/                operação e recuperação
-templates/              recursos futuros do editor
 tests/                  unitários e Playwright
 ```
 
@@ -149,7 +156,7 @@ Consulte [SECURITY.md](./SECURITY.md) antes de operar publicamente.
 - não habilita Stream, Workers Paid ou serviços de IA;
 - monitora o armazenamento conhecido;
 - configura alertas internos em 70%, 85% e 95%;
-- limita arquivos a 500 MB no Marco 1;
+- limita arquivos a 500 MB;
 - mantém uma política inicial de 90 dias para eventos;
 - não promete hard cap de cobrança da Cloudflare.
 
@@ -179,20 +186,16 @@ npm run uninstall
 
 O comando mostra os nomes exatos, recomenda backup, exige confirmação textual e permite preservar D1 e R2. Sem `.funnel-zero/installation.json`, ele se recusa a remover qualquer coisa.
 
-## Roadmap
+## Oferta demonstrativa
 
-- **Marco 1:** fundação, login, onboarding e dashboard — implementado;
-- **Marco 2:** oferta, mapa horizontal, editor em blocos e publicação;
-- **Marco 3:** upload multipart, player VSL e retenção;
-- **Marco 4:** A/B, domínios, pixels, webhooks e operação completa;
-- **Marco 5:** auditoria final, CI expandida e releases.
+A migration cria **Plano Próxima Série — Demonstração**, um funil publicado, duas páginas, duas variantes e checkout externo de teste. Todo o conteúdo é explicitamente fictício e não contém depoimentos, escassez ou promessa de resultado. Consulte [docs/DEMO-OFFER.md](./docs/DEMO-OFFER.md) e [docs/VSL-DEMO.md](./docs/VSL-DEMO.md).
 
-## Limitações conhecidas do Marco 1
+## Limitações conhecidas
 
-- o construtor visual ainda não está habilitado;
-- o R2 está pronto e monitorado, mas o upload multipart entra no Marco 3;
 - backup automático dos objetos R2 exige ferramenta S3 externa;
-- domínios personalizados não são modificados pelo instalador;
+- o domínio `workers.dev` funciona imediatamente; domínios próprios exigem token opcional e confirmação explícita;
+- upload multipart depende dos limites de corpo e CPU do plano Cloudflare em uso;
+- métricas e testes A/B são indicativos, não um motor estatístico de decisão;
 - não há processamento de pagamento.
 
 ## Licença
