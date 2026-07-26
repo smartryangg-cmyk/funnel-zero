@@ -97,6 +97,10 @@ func main() {
 	fmt.Println("[4/4] KRANO instalada com sucesso.")
 	fmt.Printf("Projeto local: %s\n", resolvedTarget)
 	fmt.Println("Guarde esta pasta. Ela contém o código da sua própria instalação.")
+	if runtime.GOOS == "windows" {
+		fmt.Println("\nPressione ENTER para fechar esta janela...")
+		bufio.NewReader(os.Stdin).ReadString('\n')
+	}
 }
 
 func printHelp() {
@@ -577,6 +581,10 @@ func fatal(err error) {
 	fmt.Fprintln(os.Stderr)
 	fmt.Fprintf(os.Stderr, "ERRO: %v\n", err)
 	fmt.Fprintln(os.Stderr, "Nada foi removido. Revise a conexão e execute o instalador novamente.")
+	if runtime.GOOS == "windows" {
+		fmt.Println("\nPressione ENTER para fechar esta janela...")
+		bufio.NewReader(os.Stdin).ReadString('\n')
+	}
 	os.Exit(1)
 }
 
