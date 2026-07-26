@@ -41,21 +41,21 @@ jobs:
           CGO_ENABLED: "0"
         run: |
           mkdir -p release
-          go build -trimpath -ldflags="-s -w -buildid=" -o release/KRANO-Installer-Windows-x64.exe ./installer
+          go build -trimpath -buildvcs=false -ldflags="-s -w -buildid=" -o release/KRANO-Installer-Windows-x64.exe ./installer
       - name: Build Linux
         env:
           GOOS: linux
           GOARCH: amd64
           CGO_ENABLED: "0"
-        run: go build -trimpath -ldflags="-s -w -buildid=" -o release/krano-installer-linux-x64 ./installer
+        run: go build -trimpath -buildvcs=false -ldflags="-s -w -buildid=" -o release/krano-installer-linux-x64 ./installer
       - name: Verify deterministic build and checked-in downloads
         run: |
           mkdir -p release-repeat
           GOOS=windows GOARCH=amd64 CGO_ENABLED=0 \
-            go build -trimpath -ldflags="-s -w -buildid=" \
+            go build -trimpath -buildvcs=false -ldflags="-s -w -buildid=" \
             -o release-repeat/KRANO-Installer-Windows-x64.exe ./installer
           GOOS=linux GOARCH=amd64 CGO_ENABLED=0 \
-            go build -trimpath -ldflags="-s -w -buildid=" \
+            go build -trimpath -buildvcs=false -ldflags="-s -w -buildid=" \
             -o release-repeat/krano-installer-linux-x64 ./installer
           cmp release/KRANO-Installer-Windows-x64.exe release-repeat/KRANO-Installer-Windows-x64.exe
           cmp release/krano-installer-linux-x64 release-repeat/krano-installer-linux-x64
