@@ -105,7 +105,7 @@ function Setup({ onComplete }: { onComplete: () => Promise<void> }) {
     try {
       await api.setup({ token, name: form.name, email: form.email, password: form.password });
       await onComplete();
-      navigate("/home", true);
+      location.assign("/home");
     } catch (caught) {
       setError(caught instanceof ApiError ? caught.message : "Falha ao configurar.");
     } finally { setSaving(false); }
