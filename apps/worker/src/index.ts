@@ -67,17 +67,20 @@ async function handleSetupComplete(request: Request, env: Env): Promise<Response
   if (!parsed.success) {
     return errorResponse(400, "VALIDATION_ERROR", "Revise os dados informados.", parsed.error.flatten());
   }
-  const tokenHash = await sha256(parsed.data.token);
-  const setupToken = await env.DB.prepare(
-    `SELECT id FROM setup_tokens
-     WHERE token_hash = ? AND used_at IS NULL AND expires_at > datetime('now') LIMIT 1`
-  )
-    .bind(tokenHash)
-    .first<SetupTokenRow>();
-  if (!setupToken) return errorResponse(403, "SETUP_TOKEN_INVALID", "Link de configuração inválido ou expirado.");
-
   const userCount = await env.DB.prepare("SELECT COUNT(*) AS count FROM users").first<number>("count");
   if ((userCount ?? 0) > 0) return errorResponse(409, "ALREADY_INSTALLED", "Administrador já criado.");
+
+  let setupTokenId: string | null = null;
+  if (parsed.data.token) {
+    const tokenHash = await sha256(parsed.data.token);
+    const tokenRow = await env.DB.prepare(
+      `SELECT id FROM setup_tokens
+       WHERE token_hash = ? AND used_at IS NULL AND expires_at > datetime('now') LIMIT 1`
+    )
+      .bind(tokenHash)
+      .first<SetupTokenRow>();
+    if (tokenRow) setupTokenId = tokenRow.id;
+  }
 
   const password = await hashPassword(parsed.data.password);
   const userId = randomId();
@@ -86,7 +89,8 @@ async function handleSetupComplete(request: Request, env: Env): Promise<Response
     version: "0.1.0",
     installedAt: new Date().toISOString()
   });
-  await env.DB.batch([
+
+  const batchQueries = [
     env.DB.prepare(
       `INSERT INTO users(id, name, email, password_hash, password_salt, password_iterations, role)
        VALUES (?, ?, ?, ?, ?, ?, 'owner')`
@@ -98,16 +102,21 @@ async function handleSetupComplete(request: Request, env: Env): Promise<Response
       password.salt,
       password.iterations
     ),
-    env.DB.prepare("UPDATE setup_tokens SET used_at = datetime('now') WHERE id = ?").bind(
-      setupToken.id
-    ),
     env.DB.prepare(
       "UPDATE installation_settings SET value_json = ?, updated_at = datetime('now') WHERE key = 'installation'"
     ).bind(installedJson),
     env.DB.prepare(
       "INSERT INTO audit_logs(id, user_id, action, entity_type, entity_id) VALUES (?, ?, 'installation.completed', 'user', ?)"
     ).bind(randomId(), userId, userId)
-  ]);
+  ];
+
+  if (setupTokenId) {
+    batchQueries.push(
+      env.DB.prepare("UPDATE setup_tokens SET used_at = datetime('now') WHERE id = ?").bind(setupTokenId)
+    );
+  }
+
+  await env.DB.batch(batchQueries);
   const session = await createSession(request, env, userId);
   return json(
     { ok: true, redirect: "/home" },

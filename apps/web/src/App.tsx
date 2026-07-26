@@ -111,15 +111,14 @@ function Setup({ onComplete }: { onComplete: () => Promise<void> }) {
     } finally { setSaving(false); }
   }
   return (
-    <AuthLayout badge="Configuração inicial" title="Sua infraestrutura. Suas regras." subtitle="Crie o proprietário desta instalação. O link de uso único será invalidado.">
-      {!token && <div className="notice warning">Execute <code>npm run setup</code> e abra a URL gerada.</div>}
+    <AuthLayout badge="Configuração inicial" title="Sua infraestrutura. Suas regras." subtitle="Crie o proprietário desta instalação para acessar seu painel.">
       <form className="form" onSubmit={(event) => void submit(event)}>
         <Field label="Seu nome"><input required minLength={2} value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /></Field>
         <Field label="E-mail administrativo"><input type="email" required value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} /></Field>
         <Field label="Senha forte"><input type="password" required minLength={12} value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} /></Field>
         <Field label="Confirmar senha"><input type="password" required value={form.confirm} onChange={(event) => setForm({ ...form, confirm: event.target.value })} /></Field>
         {error && <p className="form-error">{error}</p>}
-        <button className="button primary full" disabled={!token || saving}>{saving ? "Criando…" : "Concluir configuração"}</button>
+        <button className="button primary full" disabled={saving}>{saving ? "Criando…" : "Concluir configuração"}</button>
       </form>
       <Security />
     </AuthLayout>
