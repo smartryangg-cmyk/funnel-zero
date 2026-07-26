@@ -16,7 +16,7 @@ test("login é responsivo e acessível", async ({ page }) => {
   await page.goto("/login");
   await expect(page.getByLabel("E-mail")).toBeVisible();
   await expect(page.getByLabel("Senha")).toBeVisible();
-  await expect(page.getByRole("button", { name: "Entrar no Funnel Zero" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Entrar na KRANO" })).toBeVisible();
 });
 
 test("oferta demonstrativa publica VSL e CTA", async ({ page }) => {

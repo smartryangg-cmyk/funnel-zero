@@ -15,6 +15,7 @@ const currency = new Intl.NumberFormat("pt-BR", {
 
 export function Dashboard({ user }: { user: SessionUser }) {
   const [days, setDays] = useState(7);
+  const [view, setView] = useState<"summary" | "funnel" | "utms" | "events" | "reports">("summary");
   const [metrics, setMetrics] = useState<DashboardMetrics | null>(null);
   const [error, setError] = useState("");
 
@@ -54,76 +55,173 @@ export function Dashboard({ user }: { user: SessionUser }) {
         </div>
         <span className="filter-hint">Dados reais desta instalação</span>
       </section>
+      <nav className="analytics-tabs" aria-label="Áreas do dashboard">
+        {([
+          ["summary", "Resumo"],
+          ["funnel", "Funil"],
+          ["utms", "UTMs"],
+          ["events", "Eventos"],
+          ["reports", "Relatórios"]
+        ] as const).map(([key, label]) => <button key={key} className={view === key ? "active" : ""} onClick={() => setView(key)}>{label}</button>)}
+      </nav>
       {error && <div className="notice error">{error}</div>}
       {!metrics ? <DashboardSkeleton /> : (
         <>
-          <section className="metric-grid executive" aria-label="Métricas principais">
-            <Metric icon="◉" label="Visualizações" value={format(metrics.pageViews)} note={`${format(metrics.approximateVisitors)} visitantes`} />
-            <Metric icon="✦" label="Leads capturados" value={format(metrics.leads)} note={`${format(metrics.quizCompletions)} quizzes concluídos`} />
-            <Metric icon="✓" label="Conversão" value={`${metrics.conversionRate}%`} note={`${format(metrics.conversions)} compras confirmadas`} />
-            <Metric icon="R$" label="Receita registrada" value={currency.format(metrics.revenue)} note="Somente compras via evento/webhook" />
-          </section>
-
-          {biggestLeak ? (
-            <section className="leak-alert">
-              <span>!</span>
-              <div><small>MAIOR VAZAMENTO DO PERÍODO</small><strong>{biggestLeak.label}</strong><p>{format(biggestLeak.dropOff)} pessoas não avançaram — queda de {biggestLeak.dropRate}%.</p></div>
-              <button onClick={() => navigate("/studio")}>Abrir oferta →</button>
+          {view === "summary" && <>
+            <section className="metric-grid executive" aria-label="Métricas principais">
+              <Metric icon="R$" label="Faturamento registrado" value={currency.format(metrics.revenue)} note="Compras confirmadas por evento ou webhook" />
+              <Metric icon="◉" label="Visualizações" value={format(metrics.pageViews)} note={`${format(metrics.approximateVisitors)} visitantes únicos aproximados`} />
+              <Metric icon="✓" label="Conversão" value={`${metrics.conversionRate}%`} note={`${format(metrics.conversions)} compras confirmadas`} />
+              <Metric icon="⇢" label="Cliques no checkout" value={format(metrics.checkoutClicks)} note={`${metrics.clickThroughRate}% das visualizações`} />
             </section>
-          ) : (
-            <section className="leak-alert healthy"><span>✓</span><div><small>LEITURA DO FUNIL</small><strong>Aguardando volume suficiente</strong><p>Publique e envie tráfego para localizar os vazamentos com dados reais.</p></div></section>
-          )}
-
-          <section className="panel funnel-overview">
-            <div className="panel-header">
-              <div><span className="eyebrow">FUNIL HORIZONTAL</span><h2>Do acesso à receita</h2></div>
-              <span className="muted">{metrics.periodDays} dias</span>
-            </div>
-            <HorizontalFunnel stages={metrics.funnelStages} />
-          </section>
-
-          <section className="analytics-grid">
-            <article className="panel vertical-funnel-panel">
-              <div className="panel-header"><div><span className="eyebrow">FUNIL VERTICAL</span><h2>Queda etapa por etapa</h2></div></div>
-              {metrics.pageViews ? <VerticalFunnel stages={metrics.funnelStages} /> : <Empty icon="⇢" title="Sem acessos ainda" text="Abra a oferta de teste para começar a registrar o caminho." />}
-            </article>
-
-            <article className="panel retention-panel">
-              <div className="panel-header"><div><span className="eyebrow">RETENÇÃO DA VSL</span><h2>Quem continua assistindo</h2></div><strong>{metrics.averageRetention}%</strong></div>
-              <RetentionCurve points={metrics.retentionCurve} />
-            </article>
-
-            <article className="panel daily-panel">
-              <div className="panel-header"><div><span className="eyebrow">MOVIMENTO DIÁRIO</span><h2>Visitas e checkout</h2></div></div>
+            <section className="metric-grid compact finance-strip">
+              <Metric icon="▶" label="Plays da VSL" value={format(metrics.vslStarts)} note={`${metrics.averageRetention}% de retenção média`} />
+              <Metric icon="◎" label="Chegaram ao pitch" value={format(metrics.pitchReached)} note="Evento real do player KRATUBE" />
+              <Metric icon="✦" label="Leads" value={format(metrics.leads)} note={`${format(metrics.quizCompletions)} quizzes concluídos`} />
+              <Metric icon="—" label="Gastos e lucro" value="Conectar" note="Sem inventar ROAS: exige conta de anúncios" />
+            </section>
+            {biggestLeak ? (
+              <section className="leak-alert">
+                <span>!</span>
+                <div><small>MAIOR VAZAMENTO DO PERÍODO</small><strong>{biggestLeak.label}</strong><p>{format(biggestLeak.dropOff)} pessoas não avançaram — queda de {biggestLeak.dropRate}%.</p></div>
+                <button onClick={() => navigate("/studio")}>Abrir oferta →</button>
+              </section>
+            ) : (
+              <section className="leak-alert healthy"><span>✓</span><div><small>LEITURA DO FUNIL</small><strong>Aguardando volume suficiente</strong><p>Publique e envie tráfego para localizar os vazamentos com dados reais.</p></div></section>
+            )}
+            <section className="panel daily-panel">
+              <div className="panel-header"><div><span className="eyebrow">MOVIMENTO DIÁRIO</span><h2>Visitas, checkout e vendas</h2></div><span className="muted">Atualizado com dados da KRANO</span></div>
               <DailyChart data={metrics.dailySeries} />
-            </article>
+            </section>
+          </>}
 
-            <article className="panel capacity-panel">
-              <div className="panel-header">
-                <div><span className="eyebrow">USO GRATUITO</span><h2>Capacidade protegida</h2></div>
-                <span className="status-pill">Ativo</span>
-              </div>
-              <StorageGauge used={metrics.storageBytes} limit={metrics.storageLimitBytes} />
-              <div className="capacity-list">
-                <CapacityLine label="Armazenamento R2" value={formatBytes(metrics.storageBytes)} />
-                <CapacityLine label="Limite configurado" value={formatBytes(metrics.storageLimitBytes)} />
-                <CapacityLine label="Domínios ativos" value={String(metrics.activeDomains)} />
-                <CapacityLine label="Funis publicados" value={String(metrics.publishedFunnels)} />
-              </div>
-              <button className="button secondary full" onClick={() => navigate("/hosting")}>Ver hospedagem</button>
-            </article>
-          </section>
+          {view === "funnel" && <>
+            <section className="panel funnel-overview">
+              <div className="panel-header"><div><span className="eyebrow">FUNIL HORIZONTAL</span><h2>Do acesso à receita</h2></div><span className="muted">{metrics.periodDays} dias</span></div>
+              <HorizontalFunnel stages={metrics.funnelStages} />
+            </section>
+            <section className="analytics-grid">
+              <article className="panel vertical-funnel-panel">
+                <div className="panel-header"><div><span className="eyebrow">FUNIL VERTICAL</span><h2>Queda etapa por etapa</h2></div></div>
+                {metrics.pageViews ? <VerticalFunnel stages={metrics.funnelStages} /> : <Empty icon="⇢" title="Sem acessos ainda" text="Abra a oferta de teste para começar a registrar o caminho." />}
+              </article>
+              <article className="panel retention-panel">
+                <div className="panel-header"><div><span className="eyebrow">RETENÇÃO DA VSL</span><h2>Quem continua assistindo</h2></div><strong>{metrics.averageRetention}%</strong></div>
+                <RetentionCurve points={metrics.retentionCurve} />
+              </article>
+            </section>
+          </>}
 
-          <section className="panel quiz-insights">
-            <div className="panel-header"><div><span className="eyebrow">QUIZ INTERATIVO</span><h2>Respostas mais escolhidas</h2></div><span className="muted">{format(metrics.quizStarts)} inícios · {format(metrics.quizCompletions)} conclusões</span></div>
-            {metrics.topQuizAnswers.length ? (
-              <div className="answer-grid">{metrics.topQuizAnswers.map((item, index) => <article key={`${item.question}:${item.answer}`}><span>{String(index + 1).padStart(2, "0")}</span><div><small>{item.question}</small><strong>{item.answer}</strong></div><b>{format(item.count)}</b></article>)}</div>
-            ) : <Empty icon="?" title="As respostas aparecerão aqui" text="Adicione um bloco de quiz, publique a página e acompanhe cada alternativa." />}
-          </section>
+          {view === "utms" && <UtmReport metrics={metrics} />}
+          {view === "events" && <EventReport metrics={metrics} />}
+
+          {view === "reports" && <>
+            <section className="analytics-grid">
+              <article className="panel daily-panel">
+                <div className="panel-header"><div><span className="eyebrow">RELATÓRIO DIÁRIO</span><h2>Visitas e checkout</h2></div></div>
+                <DailyChart data={metrics.dailySeries} />
+              </article>
+              <article className="panel capacity-panel">
+                <div className="panel-header"><div><span className="eyebrow">USO GRATUITO</span><h2>Capacidade protegida</h2></div><span className="status-pill">Ativo</span></div>
+                <StorageGauge used={metrics.storageBytes} limit={metrics.storageLimitBytes} />
+                <div className="capacity-list">
+                  <CapacityLine label="Armazenamento R2" value={formatBytes(metrics.storageBytes)} />
+                  <CapacityLine label="Limite configurado" value={formatBytes(metrics.storageLimitBytes)} />
+                  <CapacityLine label="Subdomínios ativos" value={String(metrics.activeDomains)} />
+                  <CapacityLine label="Funis publicados" value={String(metrics.publishedFunnels)} />
+                </div>
+                <button className="button secondary full" onClick={() => navigate("/hosting")}>Ver hospedagem</button>
+              </article>
+            </section>
+            <section className="panel quiz-insights">
+              <div className="panel-header"><div><span className="eyebrow">QUIZ INTERATIVO</span><h2>Respostas mais escolhidas</h2></div><span className="muted">{format(metrics.quizStarts)} inícios · {format(metrics.quizCompletions)} conclusões</span></div>
+              {metrics.topQuizAnswers.length ? (
+                <div className="answer-grid">{metrics.topQuizAnswers.map((item, index) => <article key={`${item.question}:${item.answer}`}><span>{String(index + 1).padStart(2, "0")}</span><div><small>{item.question}</small><strong>{item.answer}</strong></div><b>{format(item.count)}</b></article>)}</div>
+              ) : <Empty icon="?" title="As respostas aparecerão aqui" text="Adicione um bloco de quiz, publique a página e acompanhe cada alternativa." />}
+            </section>
+          </>}
         </>
       )}
     </>
   );
+}
+
+function UtmReport({ metrics }: { metrics: DashboardMetrics }) {
+  function exportRows() {
+    const header = ["Fonte", "Campanha", "Visualizações", "Checkout", "Vendas", "Conversão", "Receita"];
+    const rows = metrics.utmRows.map((row) => [
+      row.source,
+      row.campaign,
+      row.pageViews,
+      row.checkoutClicks,
+      row.conversions,
+      `${row.conversionRate}%`,
+      row.revenue
+    ]);
+    downloadCsv("krano-utms.csv", [header, ...rows]);
+  }
+  return (
+    <section className="panel analytics-report">
+      <div className="panel-header">
+        <div><span className="eyebrow">RELATÓRIO DE UTMS</span><h2>Origem e campanha</h2></div>
+        <button className="button secondary" disabled={!metrics.utmRows.length} onClick={exportRows}>Exportar CSV</button>
+      </div>
+      <p className="muted">Agrupamento real de utm_source e utm_campaign capturados nas páginas publicadas.</p>
+      {metrics.utmRows.length ? (
+        <div className="report-table-wrap"><table className="report-table"><thead><tr><th>Fonte</th><th>Campanha</th><th>Visitas</th><th>Checkout</th><th>Vendas</th><th>Conversão</th><th>Receita</th></tr></thead><tbody>
+          {metrics.utmRows.map((row) => <tr key={`${row.source}:${row.campaign}`}><td>{row.source}</td><td>{row.campaign}</td><td>{format(row.pageViews)}</td><td>{format(row.checkoutClicks)}</td><td>{format(row.conversions)}</td><td>{row.conversionRate}%</td><td>{currency.format(row.revenue)}</td></tr>)}
+        </tbody></table></div>
+      ) : <Empty icon="UTM" title="Nenhuma UTM recebida no período" text="Use utm_source e utm_campaign nos anúncios. A KRANO captura e agrupa automaticamente." />}
+    </section>
+  );
+}
+
+function EventReport({ metrics }: { metrics: DashboardMetrics }) {
+  return (
+    <section className="panel analytics-report">
+      <div className="panel-header"><div><span className="eyebrow">EVENTOS</span><h2>Diagnóstico de rastreamento</h2></div><span className="status-pill">Tempo real</span></div>
+      <p className="muted">Eventos recebidos diretamente pelas páginas, quizzes, KRATUBE e webhooks.</p>
+      {metrics.recentEvents.length ? (
+        <div className="report-table-wrap"><table className="report-table"><thead><tr><th>Data/Hora</th><th>Status</th><th>Evento</th><th>Fonte</th><th>Campanha</th></tr></thead><tbody>
+          {metrics.recentEvents.map((event) => <tr key={event.id}><td>{formatEventDate(event.occurredAt)}</td><td><span className="event-ok">OK</span></td><td>{eventLabel(event.eventType)}</td><td>{event.source}</td><td>{event.campaign}</td></tr>)}
+        </tbody></table></div>
+      ) : <Empty icon="◎" title="Nenhum evento no período" text="Abra uma página publicada para testar PageView, VSL, CTA, lead e checkout." />}
+    </section>
+  );
+}
+
+function eventLabel(value: string): string {
+  return {
+    page_view: "Visualização de página",
+    vsl_start: "Play da VSL",
+    vsl_pause: "Pausa da VSL",
+    vsl_25: "VSL 25%",
+    vsl_50: "VSL 50%",
+    vsl_75: "VSL 75%",
+    vsl_complete: "VSL concluída",
+    vsl_pitch: "Pitch alcançado",
+    checkout_click: "Clique no checkout",
+    lead_submit: "Lead capturado",
+    quiz_start: "Quiz iniciado",
+    quiz_answer: "Resposta do quiz",
+    quiz_complete: "Quiz concluído",
+    purchase: "Venda aprovada"
+  }[value] ?? value;
+}
+
+function formatEventDate(value: string): string {
+  const date = new Date(value.endsWith("Z") ? value : `${value}Z`);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" });
+}
+
+function downloadCsv(name: string, rows: Array<Array<string | number>>) {
+  const csv = rows.map((row) => row.map((cell) => `"${String(cell).replaceAll("\"", "\"\"")}"`).join(";")).join("\n");
+  const url = URL.createObjectURL(new Blob(["\uFEFF", csv], { type: "text/csv;charset=utf-8" }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = name;
+  link.click();
+  URL.revokeObjectURL(url);
 }
 
 function Metric({ icon, label, value, note }: { icon: string; label: string; value: string; note: string }) {

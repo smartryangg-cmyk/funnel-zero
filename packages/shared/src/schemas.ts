@@ -70,6 +70,8 @@ export interface DashboardMetrics {
   retentionCurve: RetentionPoint[];
   dailySeries: DailyMetricPoint[];
   topQuizAnswers: QuizAnswerMetric[];
+  utmRows: UtmMetricRow[];
+  recentEvents: TrackingEventSummary[];
 }
 
 export interface FunnelMetricStage {
@@ -98,6 +100,25 @@ export interface QuizAnswerMetric {
   question: string;
   answer: string;
   count: number;
+}
+
+export interface UtmMetricRow {
+  source: string;
+  campaign: string;
+  pageViews: number;
+  checkoutClicks: number;
+  conversions: number;
+  revenue: number;
+  conversionRate: number;
+}
+
+export interface TrackingEventSummary {
+  id: string;
+  eventType: string;
+  occurredAt: string;
+  source: string;
+  campaign: string;
+  pageId: string | null;
 }
 
 export interface BootstrapResponse {
@@ -259,17 +280,47 @@ export interface AssetSummary {
 
 export interface PlayerConfig {
   showControls: boolean;
+  showBigPlay: boolean;
   showVolume: boolean;
+  showTime: boolean;
+  showFullscreen: boolean;
   timelineStyle: "real" | "minimal" | "hidden";
   allowSeek: boolean;
+  rewindSeconds: 0 | 5 | 10;
+  forwardSeconds: 0 | 5 | 10;
   resumePlayback: boolean;
+  resumeMessage: string;
+  resumeContinueLabel: string;
+  resumeRestartLabel: string;
   showSpeed: boolean;
   showQuality: boolean;
   autoplayMuted: boolean;
+  autoplayMessage: string;
   clickToPause: boolean;
   protectVideo: boolean;
   watermark: string;
+  primaryColor: string;
+  backgroundColor: string;
+  borderRadius: number;
+  smartProgress: boolean;
+  smartProgressHeight: number;
+  playbackRate: number;
+  loop: boolean;
+  headlineText: string;
+  headlineStartSeconds: number;
+  headlineEndSeconds: number;
+  miniHookText: string;
+  miniHookStartSeconds: number;
+  miniHookEndSeconds: number;
   ctaAtSeconds: number;
+  ctaEndSeconds: number;
+  ctaText: string;
+  ctaUrl: string;
+  ctaNewTab: boolean;
+  ctaPulse: boolean;
+  allowedDomains: string[];
+  posterAssetId: string;
+  posterTestAssetId: string;
   qualitySources: Array<{
     label: "360p" | "720p" | "1080p";
     assetId: string;
@@ -283,9 +334,14 @@ export interface VideoMetrics {
   pauses: number;
   completions: number;
   checkoutClicks: number;
+  pitchReached: number;
+  engagementRate: number;
   averageRetention: number;
   completionRate: number;
   retention: RetentionPoint[];
+  devices: Array<{ label: string; value: number }>;
+  browsers: Array<{ label: string; value: number }>;
+  sources: Array<{ label: string; value: number }>;
   periodDays: number;
 }
 

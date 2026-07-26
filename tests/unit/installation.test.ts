@@ -34,6 +34,9 @@ describe("configuração open source", () => {
     expect(existsSync(resolve(root, "install.mjs"))).toBe(true);
     expect(existsSync(resolve(root, "INSTALAR-KRANO.cmd"))).toBe(true);
     expect(existsSync(resolve(root, "install.sh"))).toBe(true);
+    expect(existsSync(resolve(root, "installer/main.go"))).toBe(true);
+    expect(existsSync(resolve(root, "installer/main_test.go"))).toBe(true);
+    expect(existsSync(resolve(root, ".github/workflows/installers.yml"))).toBe(true);
     const result = spawnSync(process.execPath, [resolve(root, "install.mjs"), "--help"], {
       cwd: root,
       encoding: "utf8"
@@ -48,5 +51,7 @@ describe("configuração open source", () => {
     };
     expect(packageJson.scripts.pretypecheck).toBe("wrangler types");
     expect(packageJson.scripts.prebuild).toBe("wrangler types");
+    expect(packageJson.scripts["db:migrate:local"]).toContain("krano-development-db");
+    expect(packageJson.scripts["db:migrate:remote"]).toContain("krano-development-db");
   });
 });

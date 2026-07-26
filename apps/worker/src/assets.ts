@@ -39,21 +39,51 @@ interface PartRow {
 
 export const DEFAULT_PLAYER_CONFIG: PlayerConfig = {
   showControls: true,
+  showBigPlay: true,
   showVolume: true,
+  showTime: true,
+  showFullscreen: true,
   timelineStyle: "real",
   allowSeek: true,
+  rewindSeconds: 0,
+  forwardSeconds: 0,
   resumePlayback: true,
+  resumeMessage: "Você já começou a assistir este vídeo",
+  resumeContinueLabel: "Continuar assistindo",
+  resumeRestartLabel: "Assistir do início",
   showSpeed: false,
   showQuality: false,
   autoplayMuted: false,
+  autoplayMessage: "Seu vídeo já começou. Clique para ouvir.",
   clickToPause: true,
   protectVideo: true,
   watermark: "",
+  primaryColor: "#f00000",
+  backgroundColor: "#000000",
+  borderRadius: 18,
+  smartProgress: false,
+  smartProgressHeight: 6,
+  playbackRate: 1,
+  loop: false,
+  headlineText: "",
+  headlineStartSeconds: 0,
+  headlineEndSeconds: 0,
+  miniHookText: "",
+  miniHookStartSeconds: 0,
+  miniHookEndSeconds: 0,
   ctaAtSeconds: 0,
+  ctaEndSeconds: 0,
+  ctaText: "Quero acessar agora",
+  ctaUrl: "",
+  ctaNewTab: false,
+  ctaPulse: true,
+  allowedDomains: [],
+  posterAssetId: "",
+  posterTestAssetId: "",
   qualitySources: []
 };
 
-function normalizePlayerConfig(value: unknown): PlayerConfig {
+export function normalizePlayerConfig(value: unknown): PlayerConfig {
   const input =
     value && typeof value === "object" && !Array.isArray(value)
       ? value as Record<string, unknown>
@@ -80,19 +110,73 @@ function normalizePlayerConfig(value: unknown): PlayerConfig {
   const timelineStyle = ["real", "minimal", "hidden"].includes(String(input.timelineStyle))
     ? String(input.timelineStyle) as PlayerConfig["timelineStyle"]
     : DEFAULT_PLAYER_CONFIG.timelineStyle;
+  const number = (key: string, fallback: number, minimum: number, maximum: number) => {
+    const parsed = Number(input[key]);
+    return Math.min(Math.max(Number.isFinite(parsed) ? parsed : fallback, minimum), maximum);
+  };
+  const text = (key: string, fallback: string, maximum: number) =>
+    typeof input[key] === "string" ? String(input[key]).trim().slice(0, maximum) : fallback;
+  const color = (key: string, fallback: string) =>
+    typeof input[key] === "string" && /^#[0-9a-fA-F]{6}$/.test(String(input[key]))
+      ? String(input[key]).toLowerCase()
+      : fallback;
+  const jump = (key: string): 0 | 5 | 10 =>
+    [0, 5, 10].includes(Number(input[key])) ? Number(input[key]) as 0 | 5 | 10 : 0;
+  const assetId = (key: string) =>
+    typeof input[key] === "string" && (/^[a-zA-Z0-9-]{8,100}$/.test(String(input[key])) || input[key] === "")
+      ? String(input[key])
+      : "";
+  const allowedDomains = Array.isArray(input.allowedDomains)
+    ? input.allowedDomains
+        .slice(0, 30)
+        .map((item) => String(item).trim().toLowerCase())
+        .filter((item) => /^(\*\.)?[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/.test(item))
+    : [];
   return {
     showControls: input.showControls !== false,
+    showBigPlay: input.showBigPlay !== false,
     showVolume: input.showVolume !== false,
+    showTime: input.showTime !== false,
+    showFullscreen: input.showFullscreen !== false,
     timelineStyle,
     allowSeek: input.allowSeek !== false,
+    rewindSeconds: jump("rewindSeconds"),
+    forwardSeconds: jump("forwardSeconds"),
     resumePlayback: input.resumePlayback !== false,
+    resumeMessage: text("resumeMessage", DEFAULT_PLAYER_CONFIG.resumeMessage, 120),
+    resumeContinueLabel: text("resumeContinueLabel", DEFAULT_PLAYER_CONFIG.resumeContinueLabel, 60),
+    resumeRestartLabel: text("resumeRestartLabel", DEFAULT_PLAYER_CONFIG.resumeRestartLabel, 60),
     showSpeed: input.showSpeed === true,
     showQuality: input.showQuality === true,
     autoplayMuted: input.autoplayMuted === true,
+    autoplayMessage: text("autoplayMessage", DEFAULT_PLAYER_CONFIG.autoplayMessage, 120),
     clickToPause: input.clickToPause !== false,
     protectVideo: input.protectVideo !== false,
     watermark: typeof input.watermark === "string" ? input.watermark.trim().slice(0, 40) : "",
-    ctaAtSeconds: Math.min(Math.max(Number(input.ctaAtSeconds) || 0, 0), 86_400),
+    primaryColor: color("primaryColor", DEFAULT_PLAYER_CONFIG.primaryColor),
+    backgroundColor: color("backgroundColor", DEFAULT_PLAYER_CONFIG.backgroundColor),
+    borderRadius: number("borderRadius", DEFAULT_PLAYER_CONFIG.borderRadius, 0, 40),
+    smartProgress: input.smartProgress === true,
+    smartProgressHeight: number("smartProgressHeight", DEFAULT_PLAYER_CONFIG.smartProgressHeight, 2, 16),
+    playbackRate: number("playbackRate", DEFAULT_PLAYER_CONFIG.playbackRate, 0.75, 1.5),
+    loop: input.loop === true,
+    headlineText: text("headlineText", "", 180),
+    headlineStartSeconds: number("headlineStartSeconds", 0, 0, 86_400),
+    headlineEndSeconds: number("headlineEndSeconds", 0, 0, 86_400),
+    miniHookText: text("miniHookText", "", 180),
+    miniHookStartSeconds: number("miniHookStartSeconds", 0, 0, 86_400),
+    miniHookEndSeconds: number("miniHookEndSeconds", 0, 0, 86_400),
+    ctaAtSeconds: number("ctaAtSeconds", 0, 0, 86_400),
+    ctaEndSeconds: number("ctaEndSeconds", 0, 0, 86_400),
+    ctaText: text("ctaText", DEFAULT_PLAYER_CONFIG.ctaText, 80),
+    ctaUrl: typeof input.ctaUrl === "string" && /^https:\/\//i.test(input.ctaUrl)
+      ? input.ctaUrl.trim().slice(0, 2_000)
+      : "",
+    ctaNewTab: input.ctaNewTab === true,
+    ctaPulse: input.ctaPulse !== false,
+    allowedDomains: [...new Set(allowedDomains)],
+    posterAssetId: assetId("posterAssetId"),
+    posterTestAssetId: assetId("posterTestAssetId"),
     qualitySources
   };
 }
@@ -299,6 +383,20 @@ async function updateAsset(
       throw new ValidationError("Uma das qualidades escolhidas não está disponível.");
     }
   }
+  if (playerConfig) {
+    const posterIds = [playerConfig.posterAssetId, playerConfig.posterTestAssetId].filter(Boolean);
+    if (posterIds.length) {
+      const placeholders = posterIds.map(() => "?").join(",");
+      const images = await env.DB.prepare(
+        `SELECT id FROM assets
+         WHERE id IN (${placeholders}) AND media_type = 'image'
+           AND upload_status = 'ready' AND deleted_at IS NULL`
+      ).bind(...posterIds).all<{ id: string }>();
+      if (images.results.length !== new Set(posterIds).size) {
+        throw new ValidationError("Uma das thumbnails escolhidas não está disponível.");
+      }
+    }
+  }
   const result = await env.DB.prepare(
     `UPDATE assets SET
        original_name = COALESCE(?, original_name),
@@ -324,7 +422,7 @@ async function readVideoMetrics(env: Env, id: string, periodDays: number): Promi
   if (!asset || asset.media_type !== "video") {
     return errorResponse(404, "NOT_FOUND", "Vídeo não encontrado.");
   }
-  const [eventCounts, uniqueViewers] = await Promise.all([
+  const [eventCounts, uniqueViewers, deviceRows, browserRows, sourceRows] = await Promise.all([
     env.DB.prepare(
       `SELECT event_type, COUNT(*) AS value
        FROM tracking_events
@@ -338,7 +436,33 @@ async function readVideoMetrics(env: Env, id: string, periodDays: number): Promi
        WHERE event_type = 'vsl_start'
          AND json_extract(properties_json, '$.assetId') = ?
          AND occurred_at > datetime('now', ?)`
-    ).bind(id, since).first<number>("value")
+    ).bind(id, since).first<number>("value"),
+    env.DB.prepare(
+      `SELECT COALESCE(json_extract(properties_json, '$.device'), 'Desconhecido') AS label,
+        COUNT(*) AS value
+       FROM tracking_events
+       WHERE event_type = 'vsl_start'
+         AND json_extract(properties_json, '$.assetId') = ?
+         AND occurred_at > datetime('now', ?)
+       GROUP BY label ORDER BY value DESC LIMIT 8`
+    ).bind(id, since).all<{ label: string; value: number }>(),
+    env.DB.prepare(
+      `SELECT COALESCE(json_extract(properties_json, '$.browser'), 'Desconhecido') AS label,
+        COUNT(*) AS value
+       FROM tracking_events
+       WHERE event_type = 'vsl_start'
+         AND json_extract(properties_json, '$.assetId') = ?
+         AND occurred_at > datetime('now', ?)
+       GROUP BY label ORDER BY value DESC LIMIT 8`
+    ).bind(id, since).all<{ label: string; value: number }>(),
+    env.DB.prepare(
+      `SELECT COALESCE(NULLIF(source, ''), 'Direto') AS label, COUNT(*) AS value
+       FROM tracking_events
+       WHERE event_type = 'vsl_start'
+         AND json_extract(properties_json, '$.assetId') = ?
+         AND occurred_at > datetime('now', ?)
+       GROUP BY label ORDER BY value DESC LIMIT 8`
+    ).bind(id, since).all<{ label: string; value: number }>()
   ]);
   const counts = new Map(
     eventCounts.results.map((row) => [row.event_type, Number(row.value)])
@@ -364,9 +488,16 @@ async function readVideoMetrics(env: Env, id: string, periodDays: number): Promi
     pauses: counts.get("vsl_pause") ?? 0,
     completions,
     checkoutClicks: counts.get("checkout_click") ?? 0,
+    pitchReached: counts.get("vsl_pitch") ?? 0,
+    engagementRate: starts > 0
+      ? Math.round(((counts.get("vsl_50") ?? 0) / starts) * 10_000) / 100
+      : 0,
     averageRetention: Math.round(weightedRetention * 10) / 10,
     completionRate: starts > 0 ? Math.round((completions / starts) * 10_000) / 100 : 0,
     retention,
+    devices: deviceRows.results.map((row) => ({ label: row.label, value: Number(row.value) })),
+    browsers: browserRows.results.map((row) => ({ label: row.label, value: Number(row.value) })),
+    sources: sourceRows.results.map((row) => ({ label: row.label, value: Number(row.value) })),
     periodDays: days
   };
   return json({ metrics });

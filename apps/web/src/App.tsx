@@ -14,7 +14,8 @@ import { AppShell, Brand, navigate } from "./ui";
 
 const Account = lazy(() => import("./Account").then((module) => ({ default: module.Account })));
 const CloudflareCenter = lazy(() => import("./Integrations").then((module) => ({ default: module.CloudflareCenter })));
-const Domains = lazy(() => import("./AdminSettings").then((module) => ({ default: module.Domains })));
+const Domains = lazy(() => import("./CloudflareDomains").then((module) => ({ default: module.Domains })));
+const Subdomains = lazy(() => import("./CloudflareDomains").then((module) => ({ default: module.Subdomains })));
 const Settings = lazy(() => import("./AdminSettings").then((module) => ({ default: module.Settings })));
 const Funnels = lazy(() => import("./Funnels").then((module) => ({ default: module.Funnels })));
 const Hosting = lazy(() => import("./Hosting").then((module) => ({ default: module.Hosting })));
@@ -75,6 +76,7 @@ export default function App() {
   else if (path === "/media-library") content = <MediaLibrary />;
   else if (path === "/tracking") content = <PixelCenter />;
   else if (path === "/domains") content = <Domains />;
+  else if (path === "/subdomains") content = <Subdomains />;
   else if (path === "/studies") content = <Studies />;
   else if (path === "/settings") content = <Settings />;
   else return <Redirect to="/home" />;
