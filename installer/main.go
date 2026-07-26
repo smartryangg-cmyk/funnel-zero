@@ -97,6 +97,15 @@ func main() {
 	fmt.Println("[4/4] KRANO instalada com sucesso.")
 	fmt.Printf("Projeto local: %s\n", resolvedTarget)
 	fmt.Println("Guarde esta pasta. Ela contém o código da sua própria instalação.")
+
+	if setupUrlData, err := os.ReadFile(filepath.Join(resolvedTarget, ".funnel-zero", "setup-url.txt")); err == nil {
+		targetUrl := strings.TrimSpace(string(setupUrlData))
+		if strings.HasPrefix(targetUrl, "http") {
+			fmt.Println("\nAbrindo o painel no seu navegador...")
+			openBrowser(targetUrl)
+		}
+	}
+
 	if runtime.GOOS == "windows" {
 		fmt.Println("\nPressione ENTER para fechar esta janela...")
 		bufio.NewReader(os.Stdin).ReadString('\n')
@@ -323,6 +332,19 @@ func runProjectInstaller(project, nodePath string, args []string) error {
 	nodeDir := filepath.Dir(nodePath)
 	command.Env = append(os.Environ(), pathKey+"="+nodeDir+string(os.PathListSeparator)+os.Getenv(pathKey))
 	return command.Run()
+}
+
+func openBrowser(url string) {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "windows":
+		cmd = exec.Command("powershell", "-NoProfile", "-Command", "Start-Process", fmt.Sprintf("'%s'", url))
+	case "darwin":
+		cmd = exec.Command("open", url)
+	default:
+		cmd = exec.Command("xdg-open", url)
+	}
+	_ = cmd.Start()
 }
 
 func nodeExecutable() string {
