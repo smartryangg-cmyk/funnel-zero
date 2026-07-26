@@ -162,6 +162,110 @@ async function handleLogin(request: Request, env: Env): Promise<Response> {
   );
 }
 
+async function handleSendAuthCode(request: Request, env: Env): Promise<Response> {
+  if (!requireSameOrigin(request)) return errorResponse(403, "ORIGIN_INVALID", "Origem inválida.");
+  const body = safeJson<{ email?: string }>(await request.text(), {});
+  const email = (body.email ?? "").trim().toLowerCase();
+  if (!email || !email.includes("@")) {
+    return errorResponse(400, "VALIDATION_ERROR", "Informe um e-mail válido.");
+  }
+  const user = await findUserByEmail(env, email);
+  if (!user || user.disabled_at) {
+    return errorResponse(404, "USER_NOT_FOUND", "Nenhuma conta encontrada com este e-mail.");
+  }
+  const code = String(Math.floor(100000 + Math.random() * 900000));
+  const codeHash = await sha256(code);
+  const id = randomId();
+  await env.DB.prepare(
+    `INSERT INTO email_auth_codes(id, email, code_hash, code_display, expires_at)
+     VALUES (?, ?, ?, ?, datetime('now', '+15 minutes'))`
+  ).bind(id, email, codeHash, code).run();
+
+  return json({
+    ok: true,
+    message: "Código de verificação gerado com sucesso.",
+    codeDisplay: code
+  });
+}
+
+async function handleVerifyAuthCodeLogin(request: Request, env: Env): Promise<Response> {
+  if (!requireSameOrigin(request)) return errorResponse(403, "ORIGIN_INVALID", "Origem inválida.");
+  const body = safeJson<{ email?: string; code?: string }>(await request.text(), {});
+  const email = (body.email ?? "").trim().toLowerCase();
+  const code = (body.code ?? "").trim();
+  if (!email || !code || code.length !== 6) {
+    return errorResponse(400, "VALIDATION_ERROR", "E-mail e código de 6 dígitos são obrigatórios.");
+  }
+  const user = await findUserByEmail(env, email);
+  if (!user || user.disabled_at) {
+    return errorResponse(401, "INVALID_CREDENTIALS", "Conta não encontrada.");
+  }
+  const codeHash = await sha256(code);
+  const authCodeRow = await env.DB.prepare(
+    `SELECT id FROM email_auth_codes
+     WHERE email = ? AND code_hash = ? AND used_at IS NULL AND expires_at > datetime('now')
+     ORDER BY created_at DESC LIMIT 1`
+  ).bind(email, codeHash).first<{ id: string }>();
+
+  if (!authCodeRow) {
+    return errorResponse(401, "INVALID_CODE", "Código incorreto ou expirado. Solicite um novo código.");
+  }
+
+  await env.DB.batch([
+    env.DB.prepare("UPDATE email_auth_codes SET used_at = datetime('now') WHERE id = ?").bind(authCodeRow.id),
+    env.DB.prepare("UPDATE users SET last_login_at = datetime('now') WHERE id = ?").bind(user.id),
+    env.DB.prepare(
+      "INSERT INTO audit_logs(id, user_id, action, entity_type, entity_id) VALUES (?, ?, 'auth.login_code', 'user', ?)"
+    ).bind(randomId(), user.id, user.id)
+  ]);
+
+  const session = await createSession(request, env, user.id);
+  return json(
+    { user: { id: user.id, name: user.name, email: user.email, role: user.role } },
+    { headers: { "Set-Cookie": session.cookie } }
+  );
+}
+
+async function handleResetPasswordWithCode(request: Request, env: Env): Promise<Response> {
+  if (!requireSameOrigin(request)) return errorResponse(403, "ORIGIN_INVALID", "Origem inválida.");
+  const body = safeJson<{ email?: string; code?: string; newPassword?: string }>(await request.text(), {});
+  const email = (body.email ?? "").trim().toLowerCase();
+  const code = (body.code ?? "").trim();
+  const newPassword = body.newPassword ?? "";
+  if (!email || !code || code.length !== 6 || newPassword.length < 12) {
+    return errorResponse(400, "VALIDATION_ERROR", "Preencha todos os campos corretamente (senha mínima de 12 caracteres).");
+  }
+  const user = await findUserByEmail(env, email);
+  if (!user || user.disabled_at) {
+    return errorResponse(404, "USER_NOT_FOUND", "Conta não encontrada.");
+  }
+  const codeHash = await sha256(code);
+  const authCodeRow = await env.DB.prepare(
+    `SELECT id FROM email_auth_codes
+     WHERE email = ? AND code_hash = ? AND used_at IS NULL AND expires_at > datetime('now')
+     ORDER BY created_at DESC LIMIT 1`
+  ).bind(email, codeHash).first<{ id: string }>();
+
+  if (!authCodeRow) {
+    return errorResponse(401, "INVALID_CODE", "Código incorreto ou expirado. Solicite um novo código.");
+  }
+
+  const password = await hashPassword(newPassword);
+  await env.DB.batch([
+    env.DB.prepare("UPDATE email_auth_codes SET used_at = datetime('now') WHERE id = ?").bind(authCodeRow.id),
+    env.DB.prepare(
+      `UPDATE users
+       SET password_hash = ?, password_salt = ?, password_iterations = ?, updated_at = datetime('now')
+       WHERE id = ?`
+    ).bind(password.hash, password.salt, password.iterations, user.id),
+    env.DB.prepare(
+      "INSERT INTO audit_logs(id, user_id, action, entity_type, entity_id) VALUES (?, ?, 'auth.password_reset', 'user', ?)"
+    ).bind(randomId(), user.id, user.id)
+  ]);
+
+  return json({ ok: true, message: "Senha redefinida com sucesso! Faça login com a nova senha." });
+}
+
 async function handleChangePassword(
   request: Request,
   env: Env,
@@ -248,6 +352,18 @@ async function handleApi(
 
   if (request.method === "POST" && url.pathname === "/api/auth/login") {
     return handleLogin(request, env);
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/auth/code/send") {
+    return handleSendAuthCode(request, env);
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/auth/code/login") {
+    return handleVerifyAuthCodeLogin(request, env);
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/auth/code/reset-password") {
+    return handleResetPasswordWithCode(request, env);
   }
 
   if (request.method === "POST" && url.pathname === "/api/auth/logout") {

@@ -81,6 +81,21 @@ export const api = {
       method: "POST",
       body: JSON.stringify(input)
     }),
+  sendAuthCode: (email: string) =>
+    request<{ ok: true; message: string; codeDisplay?: string }>("/api/auth/code/send", {
+      method: "POST",
+      body: JSON.stringify({ email })
+    }),
+  verifyAuthCodeLogin: (input: { email: string; code: string }) =>
+    request<{ user: SessionUser }>("/api/auth/code/login", {
+      method: "POST",
+      body: JSON.stringify(input)
+    }),
+  resetPasswordWithCode: (input: { email: string; code: string; newPassword: string }) =>
+    request<{ ok: true; message: string }>("/api/auth/code/reset-password", {
+      method: "POST",
+      body: JSON.stringify(input)
+    }),
   logout: () => request<{ ok: true }>("/api/auth/logout", { method: "POST", body: "{}" }),
   changePassword: (input: { currentPassword: string; newPassword: string }) =>
     request<{ ok: true; requiresLogin: true }>("/api/account/password", {
