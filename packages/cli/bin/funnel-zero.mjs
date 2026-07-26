@@ -173,7 +173,11 @@ function loginCloudflare() {
       const match = text.match(/https:\/\/dash\.cloudflare\.com\/oauth2\/auth\?[^\s\r\n]+/i);
       if (match && !opened) {
         opened = true;
-        info("Abrindo a página de autorização no seu navegador...");
+        line();
+        line(`${colors.green}┌──────────────────────────────────────────────────────────────────┐${colors.reset}`);
+        line(`${colors.green}│ 🌐 NAVEGADOR ABERTO: CLIQUE EM "AUTORIZAR" NA PÁGINA DA CLOUDFLARE │${colors.reset}`);
+        line(`${colors.green}└──────────────────────────────────────────────────────────────────┘${colors.reset}`);
+        line();
         openBrowser(match[0]);
       }
     });
@@ -184,7 +188,11 @@ function loginCloudflare() {
       const match = text.match(/https:\/\/dash\.cloudflare\.com\/oauth2\/auth\?[^\s\r\n]+/i);
       if (match && !opened) {
         opened = true;
-        info("Abrindo a página de autorização no seu navegador...");
+        line();
+        line(`${colors.green}┌──────────────────────────────────────────────────────────────────┐${colors.reset}`);
+        line(`${colors.green}│ 🌐 NAVEGADOR ABERTO: CLIQUE EM "AUTORIZAR" NA PÁGINA DA CLOUDFLARE │${colors.reset}`);
+        line(`${colors.green}└──────────────────────────────────────────────────────────────────┘${colors.reset}`);
+        line();
         openBrowser(match[0]);
       }
     });
