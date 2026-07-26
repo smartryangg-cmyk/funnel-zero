@@ -81,8 +81,13 @@ export const api = {
       method: "POST",
       body: JSON.stringify(input)
     }),
+  register: (input: { name: string; email: string; password: string }) =>
+    request<{ ok: true; message: string }>("/api/auth/register", {
+      method: "POST",
+      body: JSON.stringify(input)
+    }),
   sendAuthCode: (email: string) =>
-    request<{ ok: true; message: string; codeDisplay?: string }>("/api/auth/code/send", {
+    request<{ ok: true; message: string }>("/api/auth/code/send", {
       method: "POST",
       body: JSON.stringify({ email })
     }),

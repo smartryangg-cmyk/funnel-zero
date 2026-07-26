@@ -8,6 +8,9 @@
   "compatibility_flags": [
     "nodejs_compat"
   ],
+  "vars": {
+    "RESEND_API_KEY": ""
+  },
   "assets": {
     "directory": "./dist",
     "binding": "ASSETS",

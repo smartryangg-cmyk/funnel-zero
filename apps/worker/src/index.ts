@@ -30,6 +30,7 @@ import {
   withSecurityHeaders
 } from "./http";
 import { handleOperationsApi, handleWebhook } from "./operations";
+import { safeJson } from "./platform";
 import { servePublicPage } from "./public-page";
 import { handlePublicTrackingApi } from "./tracking";
 
@@ -162,13 +163,57 @@ async function handleLogin(request: Request, env: Env): Promise<Response> {
   );
 }
 
-async function handleSendAuthCode(request: Request, env: Env): Promise<Response> {
+async function handleRegister(request: Request, env: Env): Promise<Response> {
+  if (!requireSameOrigin(request)) return errorResponse(403, "ORIGIN_INVALID", "Origem inválida.");
+  const body = safeJson<{ name?: string; email?: string; password?: string }>(await request.text(), {});
+  const name = (body.name ?? "").trim();
+  const email = (body.email ?? "").trim().toLowerCase();
+  const passwordInput = body.password ?? "";
+
+  if (name.length < 2 || !email || !email.includes("@") || passwordInput.length < 12) {
+    return errorResponse(400, "VALIDATION_ERROR", "Preencha todos os campos corretamente (senha mínima de 12 caracteres).");
+  }
+
+  const existing = await findUserByEmail(env, email);
+  if (existing) {
+    return errorResponse(409, "EMAIL_IN_USE", "Este e-mail já está em uso.");
+  }
+
+  const id = randomId();
+  const password = await hashPassword(passwordInput);
+
+  await env.DB.prepare(
+    `INSERT INTO users(id, name, email, password_hash, password_salt, password_iterations, role)
+     VALUES (?, ?, ?, ?, ?, ?, 'editor')`
+  ).bind(
+    id,
+    name,
+    email,
+    password.hash,
+    password.salt,
+    password.iterations
+  ).run();
+
+  await env.DB.prepare(
+    "INSERT INTO audit_logs(id, user_id, action, entity_type, entity_id) VALUES (?, ?, 'user.register', 'user', ?)"
+  ).bind(randomId(), id, id).run();
+
+  return json({ ok: true, message: "Conta criada com sucesso! Faça login para continuar." });
+}
+
+async function handleSendAuthCode(request: Request, env: Env & { RESEND_API_KEY?: string }): Promise<Response> {
   if (!requireSameOrigin(request)) return errorResponse(403, "ORIGIN_INVALID", "Origem inválida.");
   const body = safeJson<{ email?: string }>(await request.text(), {});
   const email = (body.email ?? "").trim().toLowerCase();
   if (!email || !email.includes("@")) {
     return errorResponse(400, "VALIDATION_ERROR", "Informe um e-mail válido.");
   }
+
+  // Verifica configuracao do provedor de e-mail (Resend)
+  if (!env.RESEND_API_KEY) {
+    return errorResponse(500, "EMAIL_NOT_CONFIGURED", "Provedor de e-mail não configurado. Adicione RESEND_API_KEY no painel da Cloudflare.");
+  }
+
   const user = await findUserByEmail(env, email);
   if (!user || user.disabled_at) {
     return errorResponse(404, "USER_NOT_FOUND", "Nenhuma conta encontrada com este e-mail.");
@@ -177,14 +222,41 @@ async function handleSendAuthCode(request: Request, env: Env): Promise<Response>
   const codeHash = await sha256(code);
   const id = randomId();
   await env.DB.prepare(
-    `INSERT INTO email_auth_codes(id, email, code_hash, code_display, expires_at)
-     VALUES (?, ?, ?, ?, datetime('now', '+15 minutes'))`
-  ).bind(id, email, codeHash, code).run();
+    `INSERT INTO email_auth_codes(id, email, code_hash, expires_at)
+     VALUES (?, ?, ?, datetime('now', '+15 minutes'))`
+  ).bind(id, email, codeHash).run();
+
+  // Enviar e-mail usando a API do Resend
+  const emailResponse = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${env.RESEND_API_KEY}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      from: "Autenticação <noreply@resend.dev>", // Pode ser sobrescrito se o usuario configurar um dominio verificado
+      to: email,
+      subject: "Seu código de acesso",
+      html: `
+        <div style="font-family: sans-serif; max-width: 500px; margin: 0 auto;">
+          <h2>Código de Acesso</h2>
+          <p>Você solicitou um código para entrar no painel.</p>
+          <div style="background: #f4f4f5; padding: 20px; font-size: 24px; text-align: center; letter-spacing: 4px; font-weight: bold; border-radius: 8px; margin: 20px 0;">
+            ${code}
+          </div>
+          <p>Se você não solicitou este código, por favor ignore este e-mail.</p>
+        </div>
+      `
+    })
+  });
+
+  if (!emailResponse.ok) {
+    return errorResponse(500, "EMAIL_SEND_FAILED", "Falha ao enviar e-mail. Verifique se a RESEND_API_KEY está correta.");
+  }
 
   return json({
     ok: true,
-    message: "Código de verificação gerado com sucesso.",
-    codeDisplay: code
+    message: "Código enviado para seu e-mail com sucesso."
   });
 }
 
@@ -352,6 +424,10 @@ async function handleApi(
 
   if (request.method === "POST" && url.pathname === "/api/auth/login") {
     return handleLogin(request, env);
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/auth/register") {
+    return handleRegister(request, env);
   }
 
   if (request.method === "POST" && url.pathname === "/api/auth/code/send") {

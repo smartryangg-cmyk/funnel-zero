@@ -126,8 +126,9 @@ function Setup({ onComplete }: { onComplete: () => Promise<void> }) {
 }
 
 function Login({ onComplete }: { onComplete: () => Promise<void> }) {
-  const [mode, setMode] = useState<"password" | "code" | "reset">("password");
+  const [mode, setMode] = useState<"password" | "code" | "reset" | "register">("password");
   const [email, setEmail] = useState("");
+  const [name, setName] = useState("");
   const [password, setPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [code, setCode] = useState("");
@@ -147,11 +148,7 @@ function Login({ onComplete }: { onComplete: () => Promise<void> }) {
       const res = await api.sendAuthCode(email);
       setCodeSent(true);
       setCodeMessage(res.message);
-      if (res.codeDisplay) {
-        setNotice(`Código emitido: ${res.codeDisplay} (Válido por 15 min)`);
-      } else {
-        setNotice("Código enviado para seu e-mail com sucesso.");
-      }
+      setNotice(res.message);
     } catch (caught) {
       setError(caught instanceof ApiError ? caught.message : "Falha ao enviar código.");
     } finally { setSaving(false); }
@@ -167,6 +164,21 @@ function Login({ onComplete }: { onComplete: () => Promise<void> }) {
       navigate("/home", true);
     } catch (caught) {
       setError(caught instanceof ApiError ? caught.message : "E-mail ou senha incorretos.");
+    } finally { setSaving(false); }
+  }
+
+  async function submitRegister(event: FormEvent) {
+    event.preventDefault();
+    if (password.length < 12) return setError("A senha deve ter pelo menos 12 caracteres.");
+    setSaving(true);
+    setError("");
+    try {
+      const res = await api.register({ name, email, password });
+      setNotice(res.message);
+      setMode("password");
+      setPassword("");
+    } catch (caught) {
+      setError(caught instanceof ApiError ? caught.message : "Falha ao criar conta.");
     } finally { setSaving(false); }
   }
 
@@ -225,6 +237,14 @@ function Login({ onComplete }: { onComplete: () => Promise<void> }) {
         >
           Código por E-mail
         </button>
+        <button
+          type="button"
+          className={`button ${mode === "register" ? "primary" : "ghost"}`}
+          style={{ flex: 1, padding: "8px 12px", fontSize: "13px" }}
+          onClick={() => { setMode("register"); setError(""); setNotice(""); }}
+        >
+          Cadastro
+        </button>
       </div>
 
       {mode === "password" && (
@@ -272,6 +292,46 @@ function Login({ onComplete }: { onComplete: () => Promise<void> }) {
           {error && <p className="form-error">{error}</p>}
           {notice && <p className="notice success" style={{ padding: "8px 12px", fontSize: "13px" }}>{notice}</p>}
           <button className="button primary full" disabled={saving}>{saving ? "Entrando…" : "Entrar na KRANO"}</button>
+        </form>
+      )}
+
+      {mode === "register" && (
+        <form className="form" onSubmit={(event) => void submitRegister(event)}>
+          <Field label="Nome completo">
+            <input type="text" autoComplete="name" required value={name} onChange={(event) => setName(event.target.value)} />
+          </Field>
+          <Field label="E-mail">
+            <input type="email" autoComplete="email" required value={email} onChange={(event) => setEmail(event.target.value)} />
+          </Field>
+          <Field label="Nova Senha">
+            <div style={{ position: "relative" }}>
+              <input
+                type={showPassword ? "text" : "password"}
+                autoComplete="new-password"
+                required
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+              />
+              <button
+                type="button"
+                style={{
+                  position: "absolute",
+                  right: "10px",
+                  top: "50%",
+                  transform: "translateY(-50%)",
+                  background: "none",
+                  border: "none",
+                  color: "#a1a1aa",
+                  cursor: "pointer"
+                }}
+                onClick={() => setShowPassword(!showPassword)}
+              >
+                {showPassword ? "👁️‍🗨️" : "👁️"}
+              </button>
+            </div>
+          </Field>
+          {error && <p className="form-error">{error}</p>}
+          <button className="button primary full" disabled={saving}>{saving ? "Cadastrando…" : "Criar nova conta"}</button>
         </form>
       )}
 
