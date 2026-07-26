@@ -1,5 +1,5 @@
 /* eslint-disable react-refresh/only-export-components */
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import type { SessionUser } from "../../../packages/shared/src/schemas";
 
 export function navigate(to: string, replace = false) {
@@ -86,6 +86,8 @@ const navigation: NavigationGroup[] = [
   }
 ];
 
+const SIDEBAR_STATE_KEY = "krano:sidebar-collapsed";
+
 function itemIsActive(item: NavigationItem, path: string): boolean {
   const candidates = item.match ?? [item.href];
   return candidates.some((candidate) => path === candidate || path.startsWith(`${candidate}/`));
@@ -104,10 +106,40 @@ export function AppShell({
   onLogout: () => Promise<void>;
   children: ReactNode;
 }) {
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    try {
+      return localStorage.getItem(SIDEBAR_STATE_KEY) === "true";
+    } catch {
+      return false;
+    }
+  });
+
+  function toggleSidebar() {
+    setSidebarCollapsed((current) => {
+      const next = !current;
+      try {
+        localStorage.setItem(SIDEBAR_STATE_KEY, String(next));
+      } catch {
+        // A navegação continua funcional quando o armazenamento estiver bloqueado.
+      }
+      return next;
+    });
+  }
+
   return (
-    <div className="app-shell">
-      <aside className="sidebar">
+    <div className={`app-shell ${sidebarCollapsed ? "sidebar-is-collapsed" : ""}`}>
+      <aside className="sidebar" aria-label="Menu principal">
         <Brand />
+        <button
+          type="button"
+          className="sidebar-toggle"
+          aria-label={sidebarCollapsed ? "Mostrar menu lateral" : "Esconder menu lateral"}
+          aria-expanded={!sidebarCollapsed}
+          title={sidebarCollapsed ? "Mostrar menu" : "Esconder menu"}
+          onClick={toggleSidebar}
+        >
+          <span aria-hidden="true">{sidebarCollapsed ? "›" : "‹"}</span>
+        </button>
         <nav className="side-nav" aria-label="Navegação principal">
           {navigation.map((group) => (
             <section className="nav-group" key={group.label}>
@@ -116,6 +148,8 @@ export function AppShell({
                 <button
                   key={item.href}
                   className={`nav-item ${item.mobile ? "nav-mobile" : ""} ${itemIsActive(item, path) ? "active" : ""}`}
+                  title={sidebarCollapsed ? item.label : undefined}
+                  aria-label={item.label}
                   onClick={() => navigate(item.href)}
                 >
                   <span aria-hidden="true">{item.icon}</span>

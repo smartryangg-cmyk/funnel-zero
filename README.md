@@ -41,13 +41,17 @@ Git, Node.js, Wrangler ou Docker.
 
 **Windows 64 bits**
 
-1. Baixe [`KRANO-Installer-Windows-x64.exe`](./installers/KRANO-Installer-Windows-x64.exe).
+1. Baixe pelo link direto [`KRANO-Installer-Windows-x64.exe`](https://raw.githubusercontent.com/smartryangg-cmyk/funnel-zero/main/installers/KRANO-Installer-Windows-x64.exe).
 2. Dê dois cliques e acompanhe as instruções.
 3. Autorize sua conta na página oficial da Cloudflare quando o navegador abrir.
 
+O arquivo correto tem aproximadamente **6,7 MB**. Se o download tiver apenas
+alguns KB, ele é uma página HTML do GitHub e não deve ser executado. Os hashes
+oficiais estão em [`installers/SHA256SUMS.txt`](./installers/SHA256SUMS.txt).
+
 **Linux 64 bits**
 
-1. Baixe [`krano-installer-linux-x64`](./installers/krano-installer-linux-x64).
+1. Baixe pelo link direto [`krano-installer-linux-x64`](https://raw.githubusercontent.com/smartryangg-cmyk/funnel-zero/main/installers/krano-installer-linux-x64).
 2. Execute:
 
 ```bash

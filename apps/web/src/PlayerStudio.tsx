@@ -8,7 +8,16 @@ import { api } from "./api";
 import { Empty, Notice, PageHeader, format, formatBytes, navigate } from "./ui";
 
 type KratubeView = "library" | "editor" | "analytics" | "experiments" | "security";
-type EditorModule = "style" | "conversion" | "playback";
+type EditorModule =
+  | "style"
+  | "progress"
+  | "autoplay"
+  | "headlines"
+  | "actions"
+  | "resume"
+  | "playback"
+  | "quality";
+type PreviewDevice = "desktop" | "mobile";
 
 export function PlayerStudio() {
   const [assets, setAssets] = useState<AssetSummary[]>([]);
@@ -16,7 +25,8 @@ export function PlayerStudio() {
   const [config, setConfig] = useState<PlayerConfig | null>(null);
   const [metrics, setMetrics] = useState<VideoMetrics | null>(null);
   const [view, setView] = useState<KratubeView>("library");
-  const [editorModule, setEditorModule] = useState<EditorModule>("style");
+  const [editorModule, setEditorModule] = useState<EditorModule | null>(null);
+  const [previewDevice, setPreviewDevice] = useState<PreviewDevice>("desktop");
   const [days, setDays] = useState(7);
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
@@ -95,29 +105,62 @@ export function PlayerStudio() {
 
       {view !== "library" && selected && config && (
         <>
-          <section className="studio-selector panel">
-            <label className="field"><span>Vídeo selecionado</span><select value={selectedId} onChange={(event) => setSelectedId(event.target.value)}>{videos.map((asset) => <option key={asset.id} value={asset.id}>{asset.originalName}</option>)}</select></label>
-            {(view === "analytics") && <div className="period-tabs">{[1, 7, 30].map((value) => <button key={value} className={days === value ? "active" : ""} onClick={() => setDays(value)}>{value === 1 ? "Hoje" : `${value} dias`}</button>)}</div>}
-          </section>
+          {view !== "editor" && (
+            <section className="studio-selector panel">
+              <label className="field"><span>Vídeo selecionado</span><select value={selectedId} onChange={(event) => setSelectedId(event.target.value)}>{videos.map((asset) => <option key={asset.id} value={asset.id}>{asset.originalName}</option>)}</select></label>
+              {(view === "analytics") && <div className="period-tabs">{[1, 7, 30].map((value) => <button key={value} className={days === value ? "active" : ""} onClick={() => setDays(value)}>{value === 1 ? "Hoje" : `${value} dias`}</button>)}</div>}
+            </section>
+          )}
 
           {view === "editor" && (
-            <section className="kratube-workspace">
-              <article className="panel player-preview-panel">
-                <div className="panel-header"><div><span className="eyebrow">PREVIEW REAL</span><h2>{selected.originalName}</h2></div><span className="live-edit-badge">● AO VIVO</span></div>
-                <PlayerPreview asset={selected} config={config} images={images} />
-                <p className="security-note">O preview usa progresso real. A KRANO não falsifica a duração da VSL.</p>
-              </article>
-              <article className="panel player-settings kratube-editor">
-                <div className="editor-module-nav">
-                  <button className={editorModule === "style" ? "active" : ""} onClick={() => setEditorModule("style")}>Estilo</button>
-                  <button className={editorModule === "conversion" ? "active" : ""} onClick={() => setEditorModule("conversion")}>Conversão</button>
-                  <button className={editorModule === "playback" ? "active" : ""} onClick={() => setEditorModule("playback")}>Reprodução</button>
-                </div>
-                {editorModule === "style" && <StyleEditor config={config} setConfig={setConfig} />}
-                {editorModule === "conversion" && <ConversionEditor config={config} setConfig={setConfig} />}
-                {editorModule === "playback" && <PlaybackEditor config={config} setConfig={setConfig} videos={videos.filter((video) => video.id !== selected.id)} />}
-                <button className="button primary full sticky-save" disabled={saving} onClick={() => void save()}>{saving ? "Salvando…" : "Salvar player"}</button>
-              </article>
+            <section className="vturb-editor-shell">
+              <aside className="panel vturb-config-panel">
+                {editorModule ? (
+                  <>
+                    <button className="vturb-back" onClick={() => setEditorModule(null)}>← Voltar às configurações</button>
+                    <div className="vturb-config-scroll">
+                      {editorModule === "style" && <StyleEditor config={config} setConfig={setConfig} />}
+                      {editorModule === "progress" && <ProgressEditor config={config} setConfig={setConfig} />}
+                      {editorModule === "autoplay" && <AutoplayEditor config={config} setConfig={setConfig} />}
+                      {editorModule === "headlines" && <HeadlinesEditor config={config} setConfig={setConfig} />}
+                      {editorModule === "actions" && <ActionsEditor config={config} setConfig={setConfig} />}
+                      {editorModule === "resume" && <ResumeEditor config={config} setConfig={setConfig} />}
+                      {editorModule === "playback" && <PlaybackEditor config={config} setConfig={setConfig} />}
+                      {editorModule === "quality" && <QualityEditor config={config} setConfig={setConfig} videos={videos.filter((video) => video.id !== selected.id)} />}
+                    </div>
+                  </>
+                ) : (
+                  <EditorMenu config={config} onSelect={setEditorModule} />
+                )}
+                <button className="button primary full vturb-save" disabled={saving} onClick={() => void save()}>{saving ? "Salvando…" : "Salvar alterações"}</button>
+              </aside>
+
+              <div className="vturb-preview-column">
+                <header className="panel vturb-preview-toolbar">
+                  <label className="vturb-video-select">
+                    <span>Vídeo</span>
+                    <select value={selectedId} onChange={(event) => setSelectedId(event.target.value)}>{videos.map((asset) => <option key={asset.id} value={asset.id}>{asset.originalName}</option>)}</select>
+                  </label>
+                  <div className="vturb-preview-actions">
+                    <div className="device-switch" aria-label="Dispositivo do preview">
+                      <button className={previewDevice === "desktop" ? "active" : ""} aria-label="Visualização para desktop" onClick={() => setPreviewDevice("desktop")}>▣</button>
+                      <button className={previewDevice === "mobile" ? "active" : ""} aria-label="Visualização para celular" onClick={() => setPreviewDevice("mobile")}>▯</button>
+                    </div>
+                    <button className="button secondary compact-button" onClick={() => setView("analytics")}>Analytics</button>
+                  </div>
+                </header>
+
+                <article className={`panel vturb-preview-stage device-${previewDevice}`}>
+                  <div className="vturb-preview-heading">
+                    <div><span className="eyebrow">PREVIEW EM TEMPO REAL</span><h2>{selected.originalName}</h2></div>
+                    <span className="live-edit-badge">● AO VIVO</span>
+                  </div>
+                  <div className="vturb-device-frame">
+                    <PlayerPreview asset={selected} config={config} images={images} />
+                  </div>
+                  <p className="security-note">As alterações aparecem imediatamente no preview e só são publicadas ao salvar.</p>
+                </article>
+              </div>
             </section>
           )}
 
@@ -210,57 +253,119 @@ function PlayerPreview({ asset, config, images }: { asset: AssetSummary; config:
   );
 }
 
+function EditorMenu({ config, onSelect }: { config: PlayerConfig; onSelect: (module: EditorModule) => void }) {
+  const items: Array<{ key: EditorModule; icon: string; label: string; description: string; status: string }> = [
+    { key: "style", icon: "✦", label: "Estilo", description: "Cores, cantos e controles", status: "Editar" },
+    { key: "progress", icon: "◴", label: "Progresso inteligente", description: "Barra de progresso honesta", status: config.smartProgress ? "On" : "Off" },
+    { key: "autoplay", icon: "◉", label: "Autoplay inteligente", description: "Início sem som e mensagem", status: config.autoplayMuted ? "On" : "Off" },
+    { key: "headlines", icon: "T", label: "Headlines e ganchos", description: "Textos sincronizados com a VSL", status: config.headlineText || config.miniHookText ? "On" : "Off" },
+    { key: "actions", icon: "↗", label: "Botões de ação", description: "CTA por tempo e destino", status: config.ctaUrl ? "On" : "Off" },
+    { key: "resume", icon: "▣", label: "Continuar assistindo", description: "Retomar de onde o lead parou", status: config.resumePlayback ? "On" : "Off" },
+    { key: "playback", icon: "▶", label: "Opções de reprodução", description: "Linha, velocidade e navegação", status: "Abrir" },
+    { key: "quality", icon: "HD", label: "Qualidade do vídeo", description: "Fontes 360p, 720p e 1080p", status: config.showQuality ? "On" : "Off" }
+  ];
+  return (
+    <div className="vturb-menu">
+      <header>
+        <span className="eyebrow">KRATUBE PLAYER</span>
+        <h2>Configurações do vídeo</h2>
+        <p>Escolha um módulo para personalizar.</p>
+      </header>
+      <div className="vturb-module-list">
+        {items.map((item) => (
+          <button key={item.key} onClick={() => onSelect(item.key)}>
+            <span className="vturb-module-icon" aria-hidden="true">{item.icon}</span>
+            <span><strong>{item.label}</strong><small>{item.description}</small></span>
+            <b className={item.status === "On" ? "online" : ""}>{item.status}</b>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function StyleEditor({ config, setConfig }: EditorProps) {
-  return <EditorSection title="Estilo e controles" eyebrow="ESTILO">
+  return <EditorSection title="Estilos" eyebrow="APARÊNCIA">
     <div className="color-grid">
       <label className="field"><span>Cor principal</span><input type="color" value={config.primaryColor} onChange={(event) => setConfig({ ...config, primaryColor: event.target.value })} /></label>
-      <label className="field"><span>Fundo</span><input type="color" value={config.backgroundColor} onChange={(event) => setConfig({ ...config, backgroundColor: event.target.value })} /></label>
+      <label className="field"><span>Fundo do player</span><input type="color" value={config.backgroundColor} onChange={(event) => setConfig({ ...config, backgroundColor: event.target.value })} /></label>
     </div>
     <NumberField label="Cantos arredondados" value={config.borderRadius} min={0} max={40} suffix="px" onChange={(value) => setConfig({ ...config, borderRadius: value })} />
+    <div className="editor-divider" />
+    <h3>Controles</h3>
     <Toggle label="Botão de play grande" checked={config.showBigPlay} onChange={(value) => setConfig({ ...config, showBigPlay: value })} />
     <Toggle label="Controles do player" checked={config.showControls} onChange={(value) => setConfig({ ...config, showControls: value })} />
     <Toggle label="Volume" checked={config.showVolume} onChange={(value) => setConfig({ ...config, showVolume: value })} />
     <Toggle label="Tempo do vídeo" checked={config.showTime} onChange={(value) => setConfig({ ...config, showTime: value })} />
     <Toggle label="Tela cheia" checked={config.showFullscreen} onChange={(value) => setConfig({ ...config, showFullscreen: value })} />
     <Toggle label="Controle de velocidade" checked={config.showSpeed} onChange={(value) => setConfig({ ...config, showSpeed: value })} />
-    <Toggle label="Seletor de qualidade" checked={config.showQuality} onChange={(value) => setConfig({ ...config, showQuality: value })} />
   </EditorSection>;
 }
 
-function ConversionEditor({ config, setConfig }: EditorProps) {
-  return <EditorSection title="Recursos de conversão" eyebrow="CONVERSÃO">
-    <Toggle label="Progresso inteligente real" checked={config.smartProgress} onChange={(value) => setConfig({ ...config, smartProgress: value })} />
+function ProgressEditor({ config, setConfig }: EditorProps) {
+  return <EditorSection title="Progresso inteligente" eyebrow="CONVERSÃO">
+    <Toggle label="Ativar progresso inteligente" checked={config.smartProgress} onChange={(value) => setConfig({ ...config, smartProgress: value })} />
+    <p className="editor-help">A barra usa a cor principal do player e representa progresso real.</p>
     {config.smartProgress && <NumberField label="Altura da barra" value={config.smartProgressHeight} min={2} max={16} suffix="px" onChange={(value) => setConfig({ ...config, smartProgressHeight: value })} />}
-    <Toggle label="Autoplay sem som" checked={config.autoplayMuted} onChange={(value) => setConfig({ ...config, autoplayMuted: value })} />
+  </EditorSection>;
+}
+
+function AutoplayEditor({ config, setConfig }: EditorProps) {
+  return <EditorSection title="Autoplay inteligente" eyebrow="INÍCIO">
+    <Toggle label="Iniciar automaticamente sem som" checked={config.autoplayMuted} onChange={(value) => setConfig({ ...config, autoplayMuted: value })} />
+    <p className="editor-help">O visitante ativa o áudio com um clique, respeitando as regras do navegador.</p>
     {config.autoplayMuted && <label className="field"><span>Mensagem para ativar o som</span><input value={config.autoplayMessage} onChange={(event) => setConfig({ ...config, autoplayMessage: event.target.value })} /></label>}
+  </EditorSection>;
+}
+
+function HeadlinesEditor({ config, setConfig }: EditorProps) {
+  return <EditorSection title="Headlines e mini-ganchos" eyebrow="MENSAGENS">
     <label className="field"><span>Headline sobre o vídeo</span><input value={config.headlineText} onChange={(event) => setConfig({ ...config, headlineText: event.target.value })} placeholder="Texto opcional" /></label>
     <TimeRange label="Exibição da headline" start={config.headlineStartSeconds} end={config.headlineEndSeconds} onChange={(start, end) => setConfig({ ...config, headlineStartSeconds: start, headlineEndSeconds: end })} />
+    <div className="editor-divider" />
     <label className="field"><span>Mini-gancho</span><input value={config.miniHookText} onChange={(event) => setConfig({ ...config, miniHookText: event.target.value })} placeholder="Ex.: Em instantes você verá…" /></label>
     <TimeRange label="Exibição do mini-gancho" start={config.miniHookStartSeconds} end={config.miniHookEndSeconds} onChange={(start, end) => setConfig({ ...config, miniHookStartSeconds: start, miniHookEndSeconds: end })} />
-    <div className="editor-divider" />
-    <label className="field"><span>Texto do CTA</span><input value={config.ctaText} onChange={(event) => setConfig({ ...config, ctaText: event.target.value })} /></label>
-    <label className="field"><span>URL HTTPS do CTA</span><input type="url" value={config.ctaUrl} onChange={(event) => setConfig({ ...config, ctaUrl: event.target.value })} placeholder="https://checkout…" /></label>
-    <TimeRange label="Exibição do CTA" start={config.ctaAtSeconds} end={config.ctaEndSeconds} onChange={(start, end) => setConfig({ ...config, ctaAtSeconds: start, ctaEndSeconds: end })} />
-    <Toggle label="Abrir CTA em nova aba" checked={config.ctaNewTab} onChange={(value) => setConfig({ ...config, ctaNewTab: value })} />
-    <Toggle label="Animação pulsante no CTA" checked={config.ctaPulse} onChange={(value) => setConfig({ ...config, ctaPulse: value })} />
   </EditorSection>;
 }
 
-function PlaybackEditor({ config, setConfig, videos }: EditorProps & { videos: AssetSummary[] }) {
+function ActionsEditor({ config, setConfig }: EditorProps) {
+  return <EditorSection title="Botões de ação" eyebrow="CTA">
+    <label className="field"><span>Texto do botão</span><input value={config.ctaText} onChange={(event) => setConfig({ ...config, ctaText: event.target.value })} /></label>
+    <label className="field"><span>URL HTTPS do CTA</span><input type="url" value={config.ctaUrl} onChange={(event) => setConfig({ ...config, ctaUrl: event.target.value })} placeholder="https://checkout…" /></label>
+    <TimeRange label="Exibição do CTA" start={config.ctaAtSeconds} end={config.ctaEndSeconds} onChange={(start, end) => setConfig({ ...config, ctaAtSeconds: start, ctaEndSeconds: end })} />
+    <Toggle label="Abrir em nova aba" checked={config.ctaNewTab} onChange={(value) => setConfig({ ...config, ctaNewTab: value })} />
+    <Toggle label="Animação pulsante" checked={config.ctaPulse} onChange={(value) => setConfig({ ...config, ctaPulse: value })} />
+  </EditorSection>;
+}
+
+function ResumeEditor({ config, setConfig }: EditorProps) {
+  return <EditorSection title="Continuar assistindo" eyebrow="RETENÇÃO">
+    <Toggle label="Retomar de onde parou" checked={config.resumePlayback} onChange={(value) => setConfig({ ...config, resumePlayback: value })} />
+    {config.resumePlayback && <>
+      <label className="field"><span>Mensagem de retorno</span><input value={config.resumeMessage} onChange={(event) => setConfig({ ...config, resumeMessage: event.target.value })} /></label>
+      <div className="two-fields"><label className="field"><span>Botão continuar</span><input value={config.resumeContinueLabel} onChange={(event) => setConfig({ ...config, resumeContinueLabel: event.target.value })} /></label><label className="field"><span>Botão reiniciar</span><input value={config.resumeRestartLabel} onChange={(event) => setConfig({ ...config, resumeRestartLabel: event.target.value })} /></label></div>
+    </>}
+  </EditorSection>;
+}
+
+function PlaybackEditor({ config, setConfig }: EditorProps) {
   return <EditorSection title="Opções de reprodução" eyebrow="REPRODUÇÃO">
     <label className="field"><span>Linha de reprodução</span><select value={config.timelineStyle} onChange={(event) => setConfig({ ...config, timelineStyle: event.target.value as PlayerConfig["timelineStyle"] })}><option value="real">Real</option><option value="minimal">Minimalista</option><option value="hidden">Oculta</option></select></label>
     <Toggle label="Permitir avançar" checked={config.allowSeek} onChange={(value) => setConfig({ ...config, allowSeek: value })} />
     <Toggle label="Clique no vídeo para pausar" checked={config.clickToPause} onChange={(value) => setConfig({ ...config, clickToPause: value })} />
     <Toggle label="Recomeçar após o fim" checked={config.loop} onChange={(value) => setConfig({ ...config, loop: value })} />
     <label className="field"><span>Velocidade inicial</span><select value={config.playbackRate} onChange={(event) => setConfig({ ...config, playbackRate: Number(event.target.value) })}><option value={0.75}>0,75x</option><option value={1}>1x</option><option value={1.1}>1,1x</option><option value={1.2}>1,2x</option><option value={1.5}>1,5x</option></select></label>
-    <label className="field"><span>Botão voltar</span><select value={config.rewindSeconds} onChange={(event) => setConfig({ ...config, rewindSeconds: Number(event.target.value) as 0 | 5 | 10 })}><option value={0}>Oculto</option><option value={5}>5 segundos</option><option value={10}>10 segundos</option></select></label>
-    <label className="field"><span>Botão avançar</span><select value={config.forwardSeconds} onChange={(event) => setConfig({ ...config, forwardSeconds: Number(event.target.value) as 0 | 5 | 10 })}><option value={0}>Oculto</option><option value={5}>5 segundos</option><option value={10}>10 segundos</option></select></label>
-    <Toggle label="Retomar de onde parou" checked={config.resumePlayback} onChange={(value) => setConfig({ ...config, resumePlayback: value })} />
-    {config.resumePlayback && <>
-      <label className="field"><span>Mensagem de retorno</span><input value={config.resumeMessage} onChange={(event) => setConfig({ ...config, resumeMessage: event.target.value })} /></label>
-      <div className="two-fields"><label className="field"><span>Botão continuar</span><input value={config.resumeContinueLabel} onChange={(event) => setConfig({ ...config, resumeContinueLabel: event.target.value })} /></label><label className="field"><span>Botão reiniciar</span><input value={config.resumeRestartLabel} onChange={(event) => setConfig({ ...config, resumeRestartLabel: event.target.value })} /></label></div>
-    </>}
-    <h3>Qualidades alternativas</h3>
+    <div className="two-fields">
+      <label className="field"><span>Voltar</span><select value={config.rewindSeconds} onChange={(event) => setConfig({ ...config, rewindSeconds: Number(event.target.value) as 0 | 5 | 10 })}><option value={0}>Oculto</option><option value={5}>5 segundos</option><option value={10}>10 segundos</option></select></label>
+      <label className="field"><span>Avançar</span><select value={config.forwardSeconds} onChange={(event) => setConfig({ ...config, forwardSeconds: Number(event.target.value) as 0 | 5 | 10 })}><option value={0}>Oculto</option><option value={5}>5 segundos</option><option value={10}>10 segundos</option></select></label>
+    </div>
+  </EditorSection>;
+}
+
+function QualityEditor({ config, setConfig, videos }: EditorProps & { videos: AssetSummary[] }) {
+  return <EditorSection title="Qualidade do vídeo" eyebrow="FONTES">
+    <Toggle label="Mostrar seletor de qualidade" checked={config.showQuality} onChange={(value) => setConfig({ ...config, showQuality: value })} />
+    <p className="editor-help">Associe versões já enviadas à biblioteca. O player mantém a principal como automática.</p>
     {(["360p", "720p", "1080p"] as const).map((label) => (
       <label className="field" key={label}><span>{label}</span><select value={config.qualitySources.find((item) => item.label === label)?.assetId ?? ""} onChange={(event) => {
         const remaining = config.qualitySources.filter((item) => item.label !== label);
