@@ -50,6 +50,7 @@ jobs:
         run: go build -trimpath -buildvcs=false -ldflags="-s -w -buildid=" -o release/krano-installer-linux-x64 ./installer
       - name: Verify deterministic build and checked-in downloads
         run: |
+          INSTALLER_VERSION="$(sed -n 's/.*appVersion *= *"\([^"]*\)".*/\1/p' installer/main.go | head -n 1)"
           mkdir -p release-repeat
           GOOS=windows GOARCH=amd64 CGO_ENABLED=0 \
             go build -trimpath -buildvcs=false -ldflags="-s -w -buildid=" \
@@ -61,10 +62,10 @@ jobs:
           cmp release/krano-installer-linux-x64 release-repeat/krano-installer-linux-x64
           file release/KRANO-Installer-Windows-x64.exe | grep -q "PE32+ executable.*x86-64"
           file release/krano-installer-linux-x64 | grep -q "ELF 64-bit.*x86-64"
-          ./release/krano-installer-linux-x64 --version | grep -q "KRANO Installer 0.3.0"
+          ./release/krano-installer-linux-x64 --version | grep -Fq "KRANO Installer ${INSTALLER_VERSION}"
           file installers/KRANO-Installer-Windows-x64.exe | grep -q "PE32+ executable.*x86-64"
           file installers/krano-installer-linux-x64 | grep -q "ELF 64-bit.*x86-64"
-          ./installers/krano-installer-linux-x64 --version | grep -q "KRANO Installer 0.3.0"
+          ./installers/krano-installer-linux-x64 --version | grep -Fq "KRANO Installer ${INSTALLER_VERSION}"
           (cd installers && sha256sum --check SHA256SUMS.txt)
           (cd release && sha256sum krano-installer-linux-x64 KRANO-Installer-Windows-x64.exe > SHA256SUMS.txt)
       - uses: actions/upload-artifact@v4
@@ -79,9 +80,25 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          INSTALLER_VERSION="$(sed -n 's/.*appVersion *= *"\([^"]*\)".*/\1/p' installer/main.go | head -n 1)"
+          test "${GITHUB_REF_NAME}" = "v${INSTALLER_VERSION}"
+          cp release/KRANO-Installer-Windows-x64.exe \
+            "release/KRANO-Installer-${GITHUB_REF_NAME}-Windows-x64.exe"
+          cp release/krano-installer-linux-x64 \
+            "release/krano-installer-${GITHUB_REF_NAME}-linux-x64"
+          (
+            cd release
+            sha256sum \
+              "KRANO-Installer-${GITHUB_REF_NAME}-Windows-x64.exe" \
+              "krano-installer-${GITHUB_REF_NAME}-linux-x64" \
+              > "SHA256SUMS-${GITHUB_REF_NAME}.txt"
+          )
           gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1 || \
             gh release create "${GITHUB_REF_NAME}" --verify-tag --generate-notes --title "KRANO ${GITHUB_REF_NAME}"
           gh release upload "${GITHUB_REF_NAME}" \
+            "release/KRANO-Installer-${GITHUB_REF_NAME}-Windows-x64.exe" \
+            "release/krano-installer-${GITHUB_REF_NAME}-linux-x64" \
+            "release/SHA256SUMS-${GITHUB_REF_NAME}.txt" \
             release/KRANO-Installer-Windows-x64.exe \
             release/krano-installer-linux-x64 \
             release/SHA256SUMS.txt \
