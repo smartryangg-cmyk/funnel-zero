@@ -235,7 +235,7 @@ func projectVersion(folder string) string {
 }
 
 func installSource(target, branch string) error {
-	if strings.ContainsAny(branch, `/\`) || branch == "" {
+	if !validBranchName(branch) {
 		return errors.New("nome de ramo inválido")
 	}
 	temp, err := os.MkdirTemp("", "krano-source-*")
@@ -245,7 +245,7 @@ func installSource(target, branch string) error {
 	defer os.RemoveAll(temp)
 
 	archive := filepath.Join(temp, "source.zip")
-	sourceURL := fmt.Sprintf("https://github.com/%s/archive/refs/heads/%s.zip", repository, branch)
+	sourceURL := fmt.Sprintf("https://github.com/%s/archive/refs/heads/%s.zip", repository, url.PathEscape(branch))
 	if err := download(sourceURL, archive); err != nil {
 		return err
 	}
@@ -264,6 +264,16 @@ func installSource(target, branch string) error {
 		return errors.New("o pacote baixado não contém um projeto KRANO válido")
 	}
 	return overlayProjectSource(staging, target)
+}
+
+func validBranchName(branch string) bool {
+	if branch == "" || strings.Contains(branch, `\`) || strings.Contains(branch, "..") ||
+		strings.Contains(branch, "//") || strings.Contains(branch, "@{") ||
+		strings.HasPrefix(branch, "/") || strings.HasSuffix(branch, "/") ||
+		strings.HasSuffix(branch, ".") || strings.HasSuffix(branch, ".lock") {
+		return false
+	}
+	return regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/-]*$`).MatchString(branch)
 }
 
 func overlayProjectSource(source, target string) error {

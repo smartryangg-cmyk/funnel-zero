@@ -82,6 +82,17 @@ func TestOverlayProjectSourceUpdatesCodeAndPreservesInstallationState(t *testing
 	}
 }
 
+func TestValidBranchNameAcceptsFeatureBranchesAndRejectsTraversal(t *testing.T) {
+	if !validBranchName("feature/krano-monochrome-control-center") {
+		t.Fatal("feature branch should be accepted")
+	}
+	for _, branch := range []string{"", "../main", "/main", "feature//main", `feature\main`, "main.lock"} {
+		if validBranchName(branch) {
+			t.Fatalf("unsafe branch %q was accepted", branch)
+		}
+	}
+}
+
 func TestNodeArchitectureMapping(t *testing.T) {
 	architecture, err := nodeArch()
 	if err != nil {
