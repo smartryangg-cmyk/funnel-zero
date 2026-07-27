@@ -194,7 +194,7 @@ func (wizard *wizardServer) install() {
 		fail(err)
 		return
 	}
-	if !sourceReady {
+	if !sourceReady || projectVersion(wizard.target) != appVersion {
 		if err := installSource(wizard.target, wizard.branch); err != nil {
 			fail(err)
 			return

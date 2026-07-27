@@ -42,6 +42,46 @@ func TestIsKranoSource(t *testing.T) {
 	}
 }
 
+func TestOverlayProjectSourceUpdatesCodeAndPreservesInstallationState(t *testing.T) {
+	source := filepath.Join(t.TempDir(), "source")
+	target := filepath.Join(t.TempDir(), "target")
+	for _, folder := range []string{source, target, filepath.Join(target, ".funnel-zero")} {
+		if err := os.MkdirAll(folder, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(source, "package.json"), []byte(`{"name":"krano","version":"0.3.0"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "wrangler.jsonc"), []byte(`{"name":"default"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(target, "package.json"), []byte(`{"name":"krano","version":"0.1.0"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(target, "wrangler.jsonc"), []byte(`{"name":"customer"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manifest := filepath.Join(target, ".funnel-zero", "installation.json")
+	if err := os.WriteFile(manifest, []byte(`{"worker":{"url":"https://customer.example"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := overlayProjectSource(source, target); err != nil {
+		t.Fatal(err)
+	}
+	if version := projectVersion(target); version != "0.3.0" {
+		t.Fatalf("expected updated source version, received %q", version)
+	}
+	config, err := os.ReadFile(filepath.Join(target, "wrangler.jsonc"))
+	if err != nil || string(config) != `{"name":"customer"}` {
+		t.Fatalf("customer config was overwritten: %q err=%v", config, err)
+	}
+	if _, err := os.Stat(manifest); err != nil {
+		t.Fatalf("installation state was not preserved: %v", err)
+	}
+}
+
 func TestNodeArchitectureMapping(t *testing.T) {
 	architecture, err := nodeArch()
 	if err != nil {

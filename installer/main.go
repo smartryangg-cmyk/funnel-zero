@@ -31,6 +31,8 @@ const (
 	resultPrefix = "KRANO_RESULT_JSON:"
 )
 
+var defaultBranch = "feature/krano-monochrome-control-center"
+
 type nodeRelease struct {
 	Version string          `json:"version"`
 	LTS     json.RawMessage `json:"lts"`
@@ -52,7 +54,7 @@ func main() {
 	var showVersion bool
 	var consoleMode bool
 	flag.StringVar(&target, "target", "", "pasta onde a KRANO será instalada")
-	flag.StringVar(&branch, "branch", "main", "ramo do GitHub a instalar")
+	flag.StringVar(&branch, "branch", defaultBranch, "ramo do GitHub a instalar")
 	flag.BoolVar(&dryRun, "dry-run", false, "mostra o plano sem baixar ou alterar arquivos")
 	flag.BoolVar(&showVersion, "version", false, "mostra a versão do instalador")
 	flag.BoolVar(&consoleMode, "cli", false, "usa o instalador no terminal")
@@ -94,7 +96,8 @@ func main() {
 	if err != nil {
 		fatal(err)
 	}
-	if !sourceReady {
+	installedVersion := projectVersion(resolvedTarget)
+	if !sourceReady || installedVersion != appVersion {
 		fmt.Println("[1/4] Baixando o código aberto da KRANO…")
 		if err := installSource(resolvedTarget, branch); err != nil {
 			fatalf("não foi possível preparar o projeto: %v", err)
@@ -217,6 +220,20 @@ func isKranoSource(folder string) (bool, error) {
 	return value.Name == "krano", nil
 }
 
+func projectVersion(folder string) string {
+	raw, err := os.ReadFile(filepath.Join(folder, "package.json"))
+	if err != nil {
+		return ""
+	}
+	var value struct {
+		Version string `json:"version"`
+	}
+	if json.Unmarshal(raw, &value) != nil {
+		return ""
+	}
+	return value.Version
+}
+
 func installSource(target, branch string) error {
 	if strings.ContainsAny(branch, `/\`) || branch == "" {
 		return errors.New("nome de ramo inválido")
@@ -232,20 +249,76 @@ func installSource(target, branch string) error {
 	if err := download(sourceURL, archive); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(target, 0o755); err != nil {
+	staging := filepath.Join(temp, "source")
+	if err := os.MkdirAll(staging, 0o755); err != nil {
 		return err
 	}
-	if err := extractZip(archive, target, true); err != nil {
+	if err := extractZip(archive, staging, true); err != nil {
 		return err
 	}
-	ready, err := isKranoSource(target)
+	ready, err := isKranoSource(staging)
 	if err != nil {
 		return err
 	}
 	if !ready {
 		return errors.New("o pacote baixado não contém um projeto KRANO válido")
 	}
-	return nil
+	return overlayProjectSource(staging, target)
+}
+
+func overlayProjectSource(source, target string) error {
+	protected := map[string]bool{
+		".dev.vars":      true,
+		".funnel-zero":   true,
+		".git":           true,
+		".runtime":       true,
+		".wrangler":      true,
+		"node_modules":   true,
+		"wrangler.jsonc": true,
+	}
+	return filepath.WalkDir(source, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		relative, err := filepath.Rel(source, path)
+		if err != nil || relative == "." {
+			return err
+		}
+		first := strings.Split(relative, string(filepath.Separator))[0]
+		if protected[first] {
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		destination, err := safeJoin(target, relative)
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			return os.MkdirAll(destination, 0o755)
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		input, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
+			input.Close()
+			return err
+		}
+		output, err := os.OpenFile(destination, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, info.Mode())
+		if err != nil {
+			input.Close()
+			return err
+		}
+		_, copyErr := io.Copy(output, input)
+		closeErr := errors.Join(input.Close(), output.Close())
+		return errors.Join(copyErr, closeErr)
+	})
 }
 
 func ensureNode(project string) (string, error) {
