@@ -498,3 +498,41 @@ export interface DomainProviderStatus {
   tokenTemplateUrl: string | null;
   tokenAvailable: boolean;
 }
+
+export interface MetaAdsStatus {
+  configured: boolean;
+  connected: boolean;
+  profile: { id: string; name: string } | null;
+  expiresAt: string | null;
+  connectedAt: string | null;
+  redirectUri: string;
+  requiredPermissions: string[];
+}
+
+export interface MetaAdAccount {
+  id: string;
+  account_id?: string;
+  name?: string;
+  account_status?: number;
+  currency?: string;
+  timezone_name?: string;
+}
+
+export interface MetaCampaign {
+  id: string;
+  name?: string;
+  status?: string;
+  effective_status?: string;
+  objective?: string;
+}
+
+export interface MetaAccountInsight {
+  spend?: string;
+  impressions?: string;
+  reach?: string;
+  clicks?: string;
+  ctr?: string;
+  cpc?: string;
+  cpm?: string;
+  actions?: Array<{ action_type: string; value: string }>;
+}

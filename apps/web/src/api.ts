@@ -6,6 +6,10 @@ import type {
   DomainSummary,
   FunnelSummary,
   IntegrationSettings,
+  MetaAccountInsight,
+  MetaAdAccount,
+  MetaAdsStatus,
+  MetaCampaign,
   OfferSummary,
   PageSummary,
   PageVersionSummary,
@@ -340,5 +344,38 @@ export const api = {
     request<{ ok: true }>(`/api/domains/${id}`, {
       method: "DELETE",
       body: JSON.stringify({ confirmation })
-    })
+    }),
+  metaAdsStatus: () => request<MetaAdsStatus>("/api/meta-ads/status"),
+  startMetaAdsOAuth: () =>
+    request<{ authorizeUrl: string }>("/api/meta-ads/oauth/start", {
+      method: "POST",
+      body: "{}"
+    }),
+  disconnectMetaAds: () =>
+    request<{ ok: true }>("/api/meta-ads/disconnect", {
+      method: "POST",
+      body: "{}"
+    }),
+  metaAdAccounts: () =>
+    request<{ accounts: MetaAdAccount[] }>("/api/meta-ads/accounts"),
+  metaCampaigns: (accountId: string) =>
+    request<{ campaigns: MetaCampaign[] }>(
+      `/api/meta-ads/campaigns?accountId=${encodeURIComponent(accountId)}`
+    ),
+  updateMetaCampaignStatus: (
+    accountId: string,
+    campaignId: string,
+    status: "ACTIVE" | "PAUSED"
+  ) =>
+    request<{ ok: true; campaignId: string; status: "ACTIVE" | "PAUSED" }>(
+      `/api/meta-ads/campaigns/${encodeURIComponent(campaignId)}/status?accountId=${encodeURIComponent(accountId)}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({ status, confirmation: campaignId })
+      }
+    ),
+  metaInsights: (accountId: string, days = 7) =>
+    request<{ insight: MetaAccountInsight | null; periodDays: number }>(
+      `/api/meta-ads/insights?accountId=${encodeURIComponent(accountId)}&days=${encodeURIComponent(days)}`
+    )
 };

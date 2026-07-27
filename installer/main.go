@@ -26,7 +26,7 @@ import (
 )
 
 const (
-	appVersion   = "0.2.0"
+	appVersion   = "0.3.0"
 	repository   = "smartryangg-cmyk/funnel-zero"
 	resultPrefix = "KRANO_RESULT_JSON:"
 )
@@ -50,10 +50,12 @@ func main() {
 	var branch string
 	var dryRun bool
 	var showVersion bool
+	var consoleMode bool
 	flag.StringVar(&target, "target", "", "pasta onde a KRANO será instalada")
 	flag.StringVar(&branch, "branch", "main", "ramo do GitHub a instalar")
 	flag.BoolVar(&dryRun, "dry-run", false, "mostra o plano sem baixar ou alterar arquivos")
 	flag.BoolVar(&showVersion, "version", false, "mostra a versão do instalador")
+	flag.BoolVar(&consoleMode, "cli", false, "usa o instalador no terminal")
 	flag.Usage = printHelp
 	flag.Parse()
 
@@ -68,6 +70,13 @@ func main() {
 	resolvedTarget, err := resolveTarget(target)
 	if err != nil {
 		fatal(err)
+	}
+	if runtime.GOOS == "windows" && launchedFromExplorer() && !consoleMode && !dryRun {
+		hideConsoleWindow()
+		if err := runWizard(resolvedTarget, branch, flag.Args()); err != nil {
+			fatalf("não foi possível abrir o assistente: %v", err)
+		}
+		return
 	}
 	fmt.Println()
 	fmt.Println("KRANO — instalação automática")
@@ -156,6 +165,7 @@ Opções:
   --target CAMINHO   escolhe a pasta de instalação
   --branch NOME      instala outro ramo do GitHub
   --dry-run          mostra o plano sem alterar arquivos
+  --cli              usa a interface de terminal
   --version          mostra a versão
   --help             mostra esta ajuda
 

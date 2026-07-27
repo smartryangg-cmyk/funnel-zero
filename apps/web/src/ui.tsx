@@ -12,7 +12,7 @@ export function Brand() {
     <div className="brand" aria-label="KRANO">
       <span className="brand-mark" aria-hidden="true"><i /><i /></span>
       <span className="brand-word">KRANO</span>
-      <small className="brand-version">v0.2</small>
+      <small className="brand-version">v0.3</small>
     </div>
   );
 }
@@ -33,27 +33,24 @@ interface NavigationGroup {
 
 const navigation: NavigationGroup[] = [
   {
-    label: "Principal",
-    items: [{ href: "/home", icon: "home", label: "Início", mobile: true }]
+    label: "Central",
+    items: [{ href: "/home", icon: "home", label: "Visão geral", mobile: true }]
   },
   {
-    label: "Integrações",
+    label: "Criar",
     items: [
       {
-        href: "/integrations/cloudflare",
-        icon: "cloud",
-        label: "Cloudflare",
-        match: ["/integrations", "/integrations/cloudflare"],
+        href: "/studio",
+        icon: "funnel",
+        label: "Funis e ofertas",
+        match: ["/studio", "/offers", "/funnels"],
         mobile: true
       },
-      { href: "/domains", icon: "globe", label: "Domínios" },
-      { href: "/subdomains", icon: "branch", label: "Subdomínios" },
-      { href: "/hosting", icon: "server", label: "Hospedagem" },
-      { href: "/media-library", icon: "folder", label: "Gerenciador" }
+      { href: "/pages", icon: "layout", label: "Páginas e sites" }
     ]
   },
   {
-    label: "KRATUBE",
+    label: "Publicar",
     items: [
       {
         href: "/kratube",
@@ -61,33 +58,46 @@ const navigation: NavigationGroup[] = [
         label: "Vídeos e player",
         match: ["/kratube", "/player"],
         mobile: true
-      }
+      },
+      { href: "/hosting", icon: "server", label: "Hospedagem" },
+      { href: "/media-library", icon: "folder", label: "Arquivos" }
     ]
   },
   {
-    label: "Ofertas",
+    label: "Medir",
+    items: [
+      { href: "/dashboard", icon: "chart", label: "Analytics", mobile: true },
+      { href: "/tracking", icon: "target", label: "Pixels e eventos" },
+      { href: "/meta-ads", icon: "ads", label: "Meta Ads" }
+    ]
+  },
+  {
+    label: "Configurar",
     items: [
       {
-        href: "/studio",
-        icon: "funnel",
-        label: "Ofertas e funis",
-        match: ["/studio", "/offers", "/funnels", "/tracking"],
-        mobile: true
+        href: "/integrations/cloudflare",
+        icon: "cloud",
+        label: "Conexões",
+        match: ["/integrations", "/integrations/cloudflare"]
       },
-      { href: "/pages", icon: "layout", label: "Criador de sites" }
+      { href: "/domains", icon: "globe", label: "Domínios", match: ["/domains", "/subdomains"] }
     ]
-  },
-  {
-    label: "Biblioteca",
-    items: [{ href: "/studies", icon: "book", label: "Estudos" }]
-  },
-  {
-    label: "Análise",
-    items: [{ href: "/dashboard", icon: "chart", label: "Dashboards", mobile: true }]
   }
 ];
 
 const SIDEBAR_STATE_KEY = "krano:sidebar-collapsed";
+const THEME_STATE_KEY = "krano:theme";
+type Theme = "light" | "dark";
+
+function initialTheme(): Theme {
+  try {
+    const saved = localStorage.getItem(THEME_STATE_KEY);
+    if (saved === "light" || saved === "dark") return saved;
+  } catch {
+    // Usa a preferência do sistema quando o armazenamento estiver bloqueado.
+  }
+  return window.matchMedia?.("(prefers-color-scheme: light)").matches ? "light" : "dark";
+}
 
 function itemIsActive(item: NavigationItem, path: string): boolean {
   const candidates = item.match ?? [item.href];
@@ -114,6 +124,17 @@ export function AppShell({
       return false;
     }
   });
+  const [theme, setTheme] = useState<Theme>(initialTheme);
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    document.documentElement.style.colorScheme = theme;
+    try {
+      localStorage.setItem(THEME_STATE_KEY, theme);
+    } catch {
+      // O tema ainda funciona durante esta sessão.
+    }
+  }, [theme]);
 
   function toggleSidebar() {
     setSidebarCollapsed((current) => {
@@ -128,7 +149,7 @@ export function AppShell({
   }
 
   return (
-    <div className={`app-shell redline-theme tone-red ${sidebarCollapsed ? "sidebar-is-collapsed" : ""}`}>
+    <div className={`app-shell ${sidebarCollapsed ? "sidebar-is-collapsed" : ""}`}>
       <aside className="sidebar" aria-label="Menu principal">
         <Brand />
         <div className="sidebar-context">
@@ -166,6 +187,15 @@ export function AppShell({
           ))}
         </nav>
         <div className="sidebar-bottom">
+          <button
+            type="button"
+            className="theme-toggle"
+            onClick={() => setTheme((current) => current === "dark" ? "light" : "dark")}
+            aria-label={`Ativar tema ${theme === "dark" ? "claro" : "escuro"}`}
+          >
+            <span aria-hidden="true">{theme === "dark" ? "☀" : "☾"}</span>
+            <span><strong>Tema {theme === "dark" ? "escuro" : "claro"}</strong><small>Alternar aparência</small></span>
+          </button>
           <div className="free-badge">
             <span className="status-dot" />
             <div><strong>Plano gratuito protegido</strong><small>Limites monitorados pela KRANO</small></div>
@@ -323,7 +353,9 @@ type IconName =
   | "funnel"
   | "layout"
   | "book"
-  | "chart";
+  | "chart"
+  | "target"
+  | "ads";
 
 function Icon({ name }: { name: IconName }) {
   const common = {
@@ -367,6 +399,12 @@ function Icon({ name }: { name: IconName }) {
       break;
     case "chart":
       drawing = <><path d="M4 20V10M10 20V4M16 20v-7M22 20H2" /></>;
+      break;
+    case "target":
+      drawing = <><circle cx="12" cy="12" r="9" /><circle cx="12" cy="12" r="4" /><path d="M12 3v3M21 12h-3M12 21v-3M3 12h3" /></>;
+      break;
+    case "ads":
+      drawing = <><path d="M4 13V8l12-4v13L4 13Z" /><path d="M7 14v5a2 2 0 0 0 2 2h2v-6M16 9h3a2 2 0 0 1 0 4h-3" /></>;
       break;
   }
   return <svg viewBox="0 0 24 24" aria-hidden="true" {...common}>{drawing}</svg>;

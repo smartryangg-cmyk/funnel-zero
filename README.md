@@ -24,6 +24,7 @@ Este repositório contém o **MVP operacional completo**: instalação idempoten
 - tracking primário em lote, leads e conversões por webhook;
 - testes A/B com atribuição persistente e aviso de amostra;
 - Meta Pixel e GA4 por IDs validados;
+- conexão oficial com perfil Meta, contas de anúncio, campanhas e insights;
 - checkout externo com UTMs e identificador anônimo;
 - conexão guiada à Cloudflare por OAuth oficial com PKCE ou autorização oficial pré-preenchida;
 - publicação de domínios próprios com DNS e SSL automáticos;
@@ -42,12 +43,16 @@ Git, Node.js, Wrangler ou Docker.
 **Windows 64 bits**
 
 1. Baixe pelo link direto [`KRANO-Installer-Windows-x64.exe`](https://raw.githubusercontent.com/smartryangg-cmyk/funnel-zero/main/installers/KRANO-Installer-Windows-x64.exe).
-2. Dê dois cliques e acompanhe as instruções.
-3. Autorize sua conta na página oficial da Cloudflare quando o navegador abrir.
-4. Ao final, o instalador abre automaticamente o cadastro inicial no navegador e
+2. Dê dois cliques para abrir o assistente visual da KRANO.
+3. Autorize sua conta na página oficial da Cloudflare quando o assistente solicitar.
+4. Ao final, o aplicativo abre automaticamente o cadastro inicial no navegador e
    salva o endereço de continuação em `KRANO/.funnel-zero/setup-url.txt`.
+5. No painel, abra **Meta Ads** e conecte o perfil que administra seus anúncios.
 
-O arquivo correto tem aproximadamente **6,7 MB**. Se o download tiver apenas
+Nas próximas execuções, o mesmo aplicativo reconhece a instalação e oferece
+**Abrir painel** sem repetir o processo.
+
+O arquivo correto tem aproximadamente **9,2 MB**. Se o download tiver apenas
 alguns KB, ele é uma página HTML do GitHub e não deve ser executado. Os hashes
 oficiais estão em [`installers/SHA256SUMS.txt`](./installers/SHA256SUMS.txt).
 
@@ -216,6 +221,19 @@ dispositivo, navegador e origem.
 O Dashboard separa Resumo, Funil, UTMs, Eventos e Relatórios. A KRANO calcula os
 dados a partir dos próprios eventos e deixa gastos/lucro como “Conectar” enquanto
 não houver uma conta de anúncios integrada, evitando exibir ROAS fictício.
+
+## Meta Ads
+
+A área **Meta Ads** usa o fluxo OAuth oficial para conectar um perfil e consultar
+contas de anúncio, campanhas e insights de investimento, impressões, alcance,
+cliques, CTR, CPC, CPM e compras atribuídas. Tokens de usuário são criptografados
+antes de serem armazenados no D1.
+
+Por ser uma instalação open source independente, o proprietário configura seu
+próprio aplicativo Meta com `META_APP_ID` e `META_APP_SECRET`. As permissões
+`ads_read`, `ads_management` e `business_management` podem exigir verificação da
+empresa e análise do aplicativo pela Meta. O passo a passo completo está em
+[`docs/META-ADS.md`](./docs/META-ADS.md).
 
 Credenciais nunca são gravadas no D1: ficam como secrets do próprio Worker da instalação. O token guiado recebe somente Account Settings Read, Workers Scripts Edit, Workers Routes Edit e Zone Edit, restritos à conta instalada. Consulte [docs/CLOUDFLARE-OAUTH.md](./docs/CLOUDFLARE-OAUTH.md).
 

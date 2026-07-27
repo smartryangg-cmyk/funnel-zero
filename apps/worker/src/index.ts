@@ -34,6 +34,7 @@ import {
 import { handleOperationsApi, handleWebhook } from "./operations";
 import { servePublicPage } from "./public-page";
 import { handlePublicTrackingApi } from "./tracking";
+import { handleMetaAdsApi, handleMetaAdsOAuthCallback } from "./meta-ads";
 
 interface InstalledSetting {
   value_json: string;
@@ -51,7 +52,7 @@ interface CountRow {
   count: number;
 }
 
-const APP_VERSION = "0.2.0";
+const APP_VERSION = "0.3.0";
 const PRIVATE_PAGE_PREFIXES = [
   "/home",
   "/dashboard",
@@ -66,6 +67,7 @@ const PRIVATE_PAGE_PREFIXES = [
   "/pages",
   "/media-library",
   "/tracking",
+  "/meta-ads",
   "/domains",
   "/subdomains",
   "/studies",
@@ -384,6 +386,9 @@ function authorizeApiRequest(
   if (url.pathname.startsWith("/api/integrations")) {
     return requireRole(user, ADMIN_ROLES);
   }
+  if (url.pathname.startsWith("/api/meta-ads")) {
+    return requireRole(user, ADMIN_ROLES);
+  }
   if (
     url.pathname.startsWith("/api/offers")
     || url.pathname.startsWith("/api/funnels")
@@ -456,6 +461,8 @@ async function handleApi(
   if (publicTracking) return publicTracking;
   const cloudflareOAuthCallback = await handleCloudflareOAuthCallback(request, env, url);
   if (cloudflareOAuthCallback) return cloudflareOAuthCallback;
+  const metaAdsOAuthCallback = await handleMetaAdsOAuthCallback(request, env, url);
+  if (metaAdsOAuthCallback) return metaAdsOAuthCallback;
 
   const user = await getCurrentUser(request, env, ctx);
   if (!user) return errorResponse(401, "UNAUTHORIZED", "Faça login para continuar.");
@@ -487,6 +494,8 @@ async function handleApi(
   if (operationsResponse) return operationsResponse;
   const cloudflareResponse = await handleCloudflareApi(request, env, user, url);
   if (cloudflareResponse) return cloudflareResponse;
+  const metaAdsResponse = await handleMetaAdsApi(request, env, user, url);
+  if (metaAdsResponse) return metaAdsResponse;
   const domainsResponse = await handleDomainsApi(request, env, user, url);
   if (domainsResponse) return domainsResponse;
 

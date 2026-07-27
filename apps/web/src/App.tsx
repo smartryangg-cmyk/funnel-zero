@@ -27,6 +27,7 @@ const Pages = lazy(() => import("./Pages").then((module) => ({ default: module.P
 const PixelCenter = lazy(() => import("./PixelCenter").then((module) => ({ default: module.PixelCenter })));
 const PlayerStudio = lazy(() => import("./PlayerStudio").then((module) => ({ default: module.PlayerStudio })));
 const Studies = lazy(() => import("./Studies").then((module) => ({ default: module.Studies })));
+const MetaAds = lazy(() => import("./MetaAds").then((module) => ({ default: module.MetaAds })));
 
 type BootstrapState =
   | { status: "loading" }
@@ -112,6 +113,7 @@ export default function App() {
   else if (editorMatch) content = <Pages editorId={editorMatch[1]} />;
   else if (path === "/media-library") content = <MediaLibrary />;
   else if (path === "/tracking") content = <PixelCenter />;
+  else if (path === "/meta-ads") content = <MetaAds />;
   else if (path === "/domains") content = <Domains />;
   else if (path === "/subdomains") content = <Subdomains />;
   else if (path === "/studies") content = <Studies />;
@@ -521,6 +523,7 @@ function routeTitle(path: string) {
   if (path === "/dashboard") return "Dashboards";
   if (path === "/account") return "Conta";
   if (path === "/tracking") return "Rastreamento";
+  if (path === "/meta-ads") return "Meta Ads";
   if (path === "/domains") return "Domínios";
   if (path === "/subdomains") return "Subdomínios";
   return "Central de comando";

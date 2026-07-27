@@ -61,10 +61,10 @@ jobs:
           cmp release/krano-installer-linux-x64 release-repeat/krano-installer-linux-x64
           file release/KRANO-Installer-Windows-x64.exe | grep -q "PE32+ executable.*x86-64"
           file release/krano-installer-linux-x64 | grep -q "ELF 64-bit.*x86-64"
-          ./release/krano-installer-linux-x64 --version | grep -q "KRANO Installer 0.2.0"
+          ./release/krano-installer-linux-x64 --version | grep -q "KRANO Installer 0.3.0"
           file installers/KRANO-Installer-Windows-x64.exe | grep -q "PE32+ executable.*x86-64"
           file installers/krano-installer-linux-x64 | grep -q "ELF 64-bit.*x86-64"
-          ./installers/krano-installer-linux-x64 --version | grep -q "KRANO Installer 0.2.0"
+          ./installers/krano-installer-linux-x64 --version | grep -q "KRANO Installer 0.3.0"
           (cd installers && sha256sum --check SHA256SUMS.txt)
           (cd release && sha256sum krano-installer-linux-x64 KRANO-Installer-Windows-x64.exe > SHA256SUMS.txt)
       - uses: actions/upload-artifact@v4

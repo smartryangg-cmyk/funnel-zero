@@ -76,18 +76,18 @@ export function Home({ user }: { user: SessionUser }) {
       <PageHeader
         eyebrow="Início"
         title={`Bem-vindo, ${firstName(user.name)}.`}
-        subtitle="Sua central de comando para construir, publicar e medir a operação digital."
-        actions={<button className="button primary" onClick={() => navigate("/studio?new=1")}>+ Criar oferta</button>}
+        subtitle="Crie, publique e acompanhe sua operação sem trocar de ferramenta."
+        actions={<button className="button primary" onClick={() => navigate("/studio?new=1")}>Criar novo funil</button>}
       />
       {error && <Notice tone="error">{error} <button className="notice-action" onClick={() => window.location.reload()}>Tentar novamente</button></Notice>}
       <section className="welcome-hero">
         <div>
-          <span className="eyebrow">CENTRAL DE COMANDO</span>
-          <h2>Da ideia ao tráfego, tudo no lugar certo.</h2>
-          <p>Oferta, funil, páginas, VSL, rastreamento, checkout e infraestrutura em um fluxo único.</p>
+          <span className="eyebrow">COMECE POR AQUI</span>
+          <h2>O caminho mais curto até sua página no ar.</h2>
+          <p>Conecte as contas uma vez. Depois, crie o funil, adicione o vídeo e acompanhe os resultados.</p>
           <div className="welcome-actions">
-            <button className="button primary" onClick={() => navigate("/studio")}>Abrir operação</button>
-            <button className="button secondary" onClick={() => navigate("/dashboard")}>Analisar resultados</button>
+            <button className="button primary" onClick={() => navigate("/studio")}>Criar um funil</button>
+            <button className="button secondary" onClick={() => navigate("/integrations/cloudflare")}>Ver conexões</button>
           </div>
         </div>
         <div className="welcome-score">
@@ -101,8 +101,8 @@ export function Home({ user }: { user: SessionUser }) {
       <section className="command-status-grid" aria-label="Estado da operação">
         <CommandStatus
           icon="CF"
-          tone="orange"
-          label="Infraestrutura"
+          tone="neutral"
+          label="Cloudflare"
           value={state.provider?.ready ? "Conectada" : "Conectar"}
           detail={state.provider?.ready ? state.provider.accountName || "Cloudflare pronta" : "Autorize a conta uma vez"}
           ready={state.provider?.ready === true}
@@ -110,8 +110,8 @@ export function Home({ user }: { user: SessionUser }) {
         />
         <CommandStatus
           icon="WEB"
-          tone="violet"
-          label="Publicação"
+          tone="neutral"
+          label="Sites publicados"
           value={`${format(livePages.length)} no ar`}
           detail={`${format(state.pages.length)} página(s) na operação`}
           ready={livePages.length > 0}
@@ -119,8 +119,8 @@ export function Home({ user }: { user: SessionUser }) {
         />
         <CommandStatus
           icon="PLAY"
-          tone="red"
-          label="KRATUBE"
+          tone="neutral"
+          label="Vídeos"
           value={`${format(readyVideos.length)} vídeo(s)`}
           detail={readyVideos.length ? "Player pronto para configurar" : "Envie sua primeira VSL"}
           ready={readyVideos.length > 0}
@@ -128,8 +128,8 @@ export function Home({ user }: { user: SessionUser }) {
         />
         <CommandStatus
           icon="DATA"
-          tone="blue"
-          label="Dados dos últimos 7 dias"
+          tone="neutral"
+          label="Últimos 7 dias"
           value={`${format(state.metrics?.pageViews ?? 0)} visitas`}
           detail={state.metrics ? `${formatBytes(state.metrics.storageBytes)} armazenados` : "Aguardando leitura"}
           ready={(state.metrics?.pageViews ?? 0) > 0}
@@ -138,10 +138,10 @@ export function Home({ user }: { user: SessionUser }) {
       </section>
 
       <section className="workspace-steps">
-        <QuickStep number="01" title="Oferta e funil" text="Organize estratégia, etapas e checkout." action="Abrir ofertas" href="/studio" />
-        <QuickStep number="02" title="Páginas e VSL" text="Construa no mobile e configure o player." action="Construir" href="/pages" />
-        <QuickStep number="03" title="Meta e GA4" text="Cole o código e deixe a KRANO validar." action="Rastrear" href="/tracking" />
-        <QuickStep number="04" title="Publicar e medir" text="Coloque no ar e encontre os vazamentos." action="Analisar" href="/dashboard" />
+        <QuickStep number="01" title="Conecte suas contas" text="Autorize Cloudflare e Meta com orientação passo a passo." action="Conectar" href="/integrations/cloudflare" />
+        <QuickStep number="02" title="Crie o funil" text="Organize páginas, oferta, checkout e domínio." action="Criar" href="/studio" />
+        <QuickStep number="03" title="Adicione a VSL" text="Hospede o vídeo e configure o player de conversão." action="Enviar vídeo" href="/kratube" />
+        <QuickStep number="04" title="Acompanhe os dados" text="Veja visitas, campanhas, vendas e conversão." action="Analisar" href="/dashboard" />
       </section>
       <section className="panel recent-work">
         <div className="panel-header"><div><span className="eyebrow">CONTINUE DE ONDE PAROU</span><h2>Ofertas recentes</h2></div><button className="button ghost" onClick={() => navigate("/studio")}>Ver todas →</button></div>
@@ -167,7 +167,7 @@ function CommandStatus({
   href
 }: {
   icon: string;
-  tone: "orange" | "violet" | "red" | "blue";
+  tone: "neutral";
   label: string;
   value: string;
   detail: string;

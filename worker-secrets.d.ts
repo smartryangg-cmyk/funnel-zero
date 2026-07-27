@@ -16,6 +16,8 @@ declare global {
     MAX_STORAGE_BYTES: string;
     MAX_FILE_BYTES: string;
     META_GRAPH_VERSION: string;
+    META_APP_ID?: string;
+    META_APP_SECRET?: string;
     SESSION_DAYS: string;
     SESSION_SECRET: string;
     CLOUDFLARE_API_TOKEN?: string;

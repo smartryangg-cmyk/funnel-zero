@@ -300,7 +300,7 @@ function HorizontalFunnel({ stages }: { stages: FunnelMetricStage[] }) {
           <linearGradient id="krano-flow" x1="0" x2="1">
             <stop offset="0" stopColor="#5f0000" />
             <stop offset=".5" stopColor="#c70000" />
-            <stop offset="1" stopColor="#ff0000" />
+            <stop offset="1" stopColor="currentColor" />
           </linearGradient>
           <filter id="krano-glow"><feGaussianBlur stdDeviation="9" /></filter>
         </defs>
