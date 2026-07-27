@@ -26,7 +26,7 @@ import (
 )
 
 const (
-	appVersion   = "0.3.0"
+	appVersion   = "0.3.1"
 	repository   = "smartryangg-cmyk/funnel-zero"
 	resultPrefix = "KRANO_RESULT_JSON:"
 )
@@ -53,13 +53,25 @@ func main() {
 	var dryRun bool
 	var showVersion bool
 	var consoleMode bool
+	var nonInteractive bool
 	flag.StringVar(&target, "target", "", "pasta onde a KRANO será instalada")
 	flag.StringVar(&branch, "branch", defaultBranch, "ramo do GitHub a instalar")
 	flag.BoolVar(&dryRun, "dry-run", false, "mostra o plano sem baixar ou alterar arquivos")
 	flag.BoolVar(&showVersion, "version", false, "mostra a versão do instalador")
 	flag.BoolVar(&consoleMode, "cli", false, "usa o instalador no terminal")
+	flag.BoolVar(&nonInteractive, "yes", false, "confirma automaticamente as etapas seguras")
 	flag.Usage = printHelp
-	flag.Parse()
+	normalizedArgs, recoveryMode := normalizeInstallerArgs(os.Args[1:])
+	if err := flag.CommandLine.Parse(normalizedArgs); err != nil {
+		fatal(err)
+	}
+	projectArgs := append([]string(nil), flag.Args()...)
+	if recoveryMode {
+		projectArgs = append([]string{"recover"}, projectArgs...)
+	}
+	if nonInteractive && !contains(projectArgs, "--yes") {
+		projectArgs = append(projectArgs, "--yes")
+	}
 
 	if showVersion {
 		fmt.Printf("KRANO Installer %s\n", appVersion)
@@ -75,7 +87,7 @@ func main() {
 	}
 	if runtime.GOOS == "windows" && launchedFromExplorer() && !consoleMode && !dryRun {
 		hideConsoleWindow()
-		if err := runWizard(resolvedTarget, branch, flag.Args()); err != nil {
+		if err := runWizard(resolvedTarget, branch, projectArgs); err != nil {
 			fatalf("não foi possível abrir o assistente: %v", err)
 		}
 		return
@@ -113,7 +125,7 @@ func main() {
 	}
 
 	fmt.Println("[3/4] Preparando dependências e infraestrutura…")
-	result, logPath, err := runProjectInstaller(resolvedTarget, nodePath, flag.Args())
+	result, logPath, err := runProjectInstaller(resolvedTarget, nodePath, projectArgs)
 	if err != nil {
 		if logPath != "" {
 			fmt.Printf("Log da tentativa: %s\n", logPath)
@@ -146,6 +158,19 @@ func main() {
 	}
 	fmt.Println("Guarde esta pasta. Ela contém o código da sua própria instalação.")
 	pauseIfExplorerLaunch()
+}
+
+func normalizeInstallerArgs(args []string) ([]string, bool) {
+	normalized := make([]string, 0, len(args))
+	recovery := false
+	for _, arg := range args {
+		if arg == "recover" {
+			recovery = true
+			continue
+		}
+		normalized = append(normalized, arg)
+	}
+	return normalized, recovery
 }
 
 func printHelp() {
@@ -441,6 +466,9 @@ func nodeArch() (string, error) {
 
 func runProjectInstaller(project, nodePath string, args []string) (cliResult, string, error) {
 	installer := filepath.Join(project, "install.mjs")
+	if contains(args, "recover") {
+		installer = filepath.Join(project, "packages", "cli", "bin", "funnel-zero.mjs")
+	}
 	if _, err := os.Stat(installer); err != nil {
 		return cliResult{}, "", errors.New("install.mjs não foi encontrado no projeto")
 	}

@@ -93,6 +93,16 @@ func TestValidBranchNameAcceptsFeatureBranchesAndRejectsTraversal(t *testing.T) 
 	}
 }
 
+func TestNormalizeInstallerArgsAcceptsRecoverBeforeFlags(t *testing.T) {
+	args, recovery := normalizeInstallerArgs([]string{"recover", "--target", `C:\KRANO`, "--yes"})
+	if !recovery {
+		t.Fatal("recover command was not detected")
+	}
+	if got := strings.Join(args, "|"); got != `--target|C:\KRANO|--yes` {
+		t.Fatalf("unexpected normalized arguments: %s", got)
+	}
+}
+
 func TestNodeArchitectureMapping(t *testing.T) {
 	architecture, err := nodeArch()
 	if err != nil {
@@ -187,7 +197,7 @@ func TestExtractTarGzPreservesSafeNodeSymlinksOnLinux(t *testing.T) {
 }
 
 func TestParseCLIResultUsesStructuredSignal(t *testing.T) {
-	output := "progresso\n" + resultPrefix + `{"ok":true,"action":"onboarding","url":"https://krano.example/setup?token=abc","recoveryFile":"C:\\KRANO\\.funnel-zero\\setup-url.txt","version":"0.3.0"}` + "\n"
+	output := "progresso\n" + resultPrefix + `{"ok":true,"action":"onboarding","url":"https://krano.example/setup?token=abc","recoveryFile":"C:\\KRANO\\.funnel-zero\\setup-url.txt","version":"0.3.1"}` + "\n"
 	result, err := parseCLIResult(output)
 	if err != nil {
 		t.Fatalf("valid result was rejected: %v", err)

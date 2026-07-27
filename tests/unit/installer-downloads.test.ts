@@ -20,12 +20,12 @@ describe("downloads dos instaladores", () => {
     expect(linuxInstaller.readUInt16LE(18)).toBe(0x3e);
   });
 
-  it("usa links raw que entregam os binários em vez da página HTML do GitHub", () => {
+  it("usa links diretos do GitHub Releases em vez da página HTML do GitHub", () => {
     expect(readme).toContain(
-      "https://raw.githubusercontent.com/smartryangg-cmyk/funnel-zero/main/installers/KRANO-Installer-Windows-x64.exe"
+      "https://github.com/smartryangg-cmyk/funnel-zero/releases/latest/download/KRANO-Installer-Windows-x64.exe"
     );
     expect(readme).toContain(
-      "https://raw.githubusercontent.com/smartryangg-cmyk/funnel-zero/main/installers/krano-installer-linux-x64"
+      "https://github.com/smartryangg-cmyk/funnel-zero/releases/latest/download/krano-installer-linux-x64"
     );
     expect(readme).not.toContain(
       "[`KRANO-Installer-Windows-x64.exe`](./installers/KRANO-Installer-Windows-x64.exe)"

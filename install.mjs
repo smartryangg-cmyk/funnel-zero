@@ -22,7 +22,7 @@ function run(command, args) {
 
 function printHelp() {
   console.log(`
-KRANO 0.3.0 — instalador de etapa única com interface guiada
+KRANO 0.3.1 — instalador de etapa única com interface guiada
 
 Uso:
   node install.mjs

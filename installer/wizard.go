@@ -34,14 +34,15 @@ type savedInstallation struct {
 }
 
 type wizardServer struct {
-	mu       sync.RWMutex
-	state    wizardState
-	token    string
-	target   string
-	branch   string
-	args     []string
-	started  bool
-	shutdown func()
+	mu        sync.RWMutex
+	state     wizardState
+	token     string
+	target    string
+	branch    string
+	args      []string
+	started   bool
+	operation string
+	shutdown  func()
 }
 
 func runWizard(target, branch string, args []string) error {
@@ -83,6 +84,7 @@ func runWizard(target, branch string, args []string) error {
 	mux.HandleFunc("/", wizard.page)
 	mux.HandleFunc("/api/state", wizard.readState)
 	mux.HandleFunc("/api/start", wizard.start)
+	mux.HandleFunc("/api/recover", wizard.recoverAccess)
 	mux.HandleFunc("/api/open", wizard.openPanel)
 	server.Handler = mux
 
@@ -127,6 +129,14 @@ func (wizard *wizardServer) readState(response http.ResponseWriter, request *htt
 }
 
 func (wizard *wizardServer) start(response http.ResponseWriter, request *http.Request) {
+	wizard.beginOperation(response, request, "setup")
+}
+
+func (wizard *wizardServer) recoverAccess(response http.ResponseWriter, request *http.Request) {
+	wizard.beginOperation(response, request, "recover")
+}
+
+func (wizard *wizardServer) beginOperation(response http.ResponseWriter, request *http.Request, operation string) {
 	if request.Method != http.MethodPost || !wizard.authorized(request) {
 		http.NotFound(response, request)
 		return
@@ -138,9 +148,16 @@ func (wizard *wizardServer) start(response http.ResponseWriter, request *http.Re
 		return
 	}
 	wizard.started = true
+	wizard.operation = operation
+	title := "Preparando a KRANO"
+	message := "Baixando o projeto oficial e verificando o computador."
+	if operation == "recover" {
+		title = "Preparando recuperação segura"
+		message = "Validando sua instalação e criando um link temporário de uso único."
+	}
 	wizard.state = wizardState{
-		Status: "running", Step: 1, Title: "Preparando a KRANO",
-		Message:     "Baixando o projeto oficial e verificando o computador.",
+		Status: "running", Step: 1, Title: title,
+		Message:     message,
 		ProjectPath: wizard.target,
 	}
 	wizard.mu.Unlock()
@@ -210,6 +227,9 @@ func (wizard *wizardServer) install() {
 
 	update(3, "Conecte sua Cloudflare", "Uma página oficial pode abrir. Entre na conta e autorize a infraestrutura da KRANO.")
 	installerArgs := append([]string(nil), wizard.args...)
+	if wizard.operation == "recover" && !contains(installerArgs, "recover") {
+		installerArgs = append([]string{"recover"}, installerArgs...)
+	}
 	if !contains(installerArgs, "--yes") {
 		installerArgs = append(installerArgs, "--yes")
 	}
@@ -223,7 +243,13 @@ func (wizard *wizardServer) install() {
 		return
 	}
 
-	update(4, "Instalação concluída", "O painel será aberto. Termine seu cadastro e conecte o Facebook em Meta Ads.")
+	title := "Instalação concluída"
+	message := "O painel será aberto. Termine seu cadastro e conecte o Facebook em Meta Ads."
+	if result.Action == "recovery" {
+		title = "Recuperação pronta"
+		message = "Defina sua nova senha na página aberta. O link expira em 30 minutos."
+	}
+	update(4, title, message)
 	wizard.mu.Lock()
 	wizard.state.Status = "complete"
 	wizard.state.Installed = true
@@ -286,7 +312,7 @@ aside footer{color:#777b83;font-size:11px;line-height:1.6}main{display:grid;plac
 .eyebrow{color:#969aa3;font-size:11px;font-weight:750;letter-spacing:1.4px}h1{font-size:36px;letter-spacing:-1.5px;margin:12px 0}p{color:#9b9fa8;line-height:1.65}.connections{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:25px 0}
 .connection{padding:16px;border:1px solid #2b2e34;border-radius:12px;background:#181a1e}.connection strong,.connection small{display:block}.connection small{color:#858992;margin-top:5px}
 .progress{height:6px;margin:24px 0;background:#24262b;border-radius:20px;overflow:hidden}.progress i{display:block;height:100%;width:0;background:#fff;transition:width .3s}
-.actions{display:flex;gap:10px;margin-top:26px}button{border:1px solid #34373d;border-radius:10px;padding:12px 17px;background:#202226;color:#fff;font-weight:750;cursor:pointer}
+.actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:26px}button{border:1px solid #34373d;border-radius:10px;padding:12px 17px;background:#202226;color:#fff;font-weight:750;cursor:pointer}
 button.primary{background:#f4f4f4;color:#111;border-color:#f4f4f4}button:disabled{opacity:.5;cursor:not-allowed}.error{padding:13px;border:1px solid #55464a;border-radius:10px;color:#d9c6c9;background:#21191b}
 code{display:block;margin-top:18px;padding:10px;border-radius:8px;color:#92969e;background:#0d0e10;font-size:11px;overflow-wrap:anywhere}
 @media(max-width:760px){.shell{grid-template-columns:1fr}aside{display:none}main{padding:18px}.card{padding:25px}.connections{grid-template-columns:1fr}h1{font-size:29px}}
@@ -301,10 +327,10 @@ code{display:block;margin-top:18px;padding:10px;border-radius:8px;color:#92969e;
 <main><section class="card"><span class="eyebrow">ASSISTENTE DE INSTALAÇÃO</span><h1 id="title">Carregando…</h1><p id="message"></p>
 <div class="connections"><div class="connection"><strong>Cloudflare</strong><small>Hospedagem, banco, vídeos e domínios</small></div><div class="connection"><strong>Meta</strong><small>Anúncios, campanhas, pixels e resultados</small></div></div>
 <div class="progress"><i id="progress"></i></div><div id="error"></div><code id="path"></code>
-<div class="actions"><button class="primary" id="start">Instalar KRANO</button><button id="open" hidden>Abrir painel</button></div>
+<div class="actions"><button class="primary" id="start">Instalar KRANO</button><button id="open" hidden>Abrir painel</button><button id="recover" hidden>Recuperar acesso</button></div>
 </section></main></div>
 <script>
-const token={{printf "%q" .Token}},headers={"X-Krano-Token":token},title=document.querySelector("#title"),message=document.querySelector("#message"),progress=document.querySelector("#progress"),error=document.querySelector("#error"),start=document.querySelector("#start"),open=document.querySelector("#open"),path=document.querySelector("#path");
-async function state(){const r=await fetch("/api/state?token="+encodeURIComponent(token),{headers});const s=await r.json();title.textContent=s.title;message.textContent=s.message;path.textContent="Pasta local: "+s.projectPath;progress.style.width=(s.step*25)+"%";error.innerHTML=s.error?'<p class="error"></p>':"";if(s.error)error.firstChild.textContent=s.error;start.hidden=s.status==="running"||s.status==="complete";start.disabled=s.status==="running";start.textContent=s.installed?"Atualizar instalação":"Instalar KRANO";open.hidden=!s.panelUrl;document.querySelectorAll(".step").forEach((el)=>el.classList.toggle("active",Number(el.dataset.step)<=Math.max(1,s.step)));if(s.status==="running")setTimeout(state,1200)}
-start.onclick=async()=>{start.disabled=true;await fetch("/api/start",{method:"POST",headers});state()};open.onclick=async()=>{open.disabled=true;await fetch("/api/open",{method:"POST",headers})};state();
+const token={{printf "%q" .Token}},headers={"X-Krano-Token":token},title=document.querySelector("#title"),message=document.querySelector("#message"),progress=document.querySelector("#progress"),error=document.querySelector("#error"),start=document.querySelector("#start"),open=document.querySelector("#open"),recover=document.querySelector("#recover"),path=document.querySelector("#path");
+async function state(){const r=await fetch("/api/state?token="+encodeURIComponent(token),{headers});const s=await r.json();title.textContent=s.title;message.textContent=s.message;path.textContent="Pasta local: "+s.projectPath;progress.style.width=(s.step*25)+"%";error.innerHTML=s.error?'<p class="error"></p>':"";if(s.error)error.firstChild.textContent=s.error;const busy=s.status==="running";start.hidden=busy||s.status==="complete";start.disabled=busy;start.textContent=s.installed?"Atualizar instalação":"Instalar KRANO";open.hidden=!s.panelUrl||busy;recover.hidden=!s.installed||busy;document.querySelectorAll(".step").forEach((el)=>el.classList.toggle("active",Number(el.dataset.step)<=Math.max(1,s.step)));if(busy)setTimeout(state,1200)}
+start.onclick=async()=>{start.disabled=true;await fetch("/api/start",{method:"POST",headers});state()};open.onclick=async()=>{open.disabled=true;await fetch("/api/open",{method:"POST",headers})};recover.onclick=async()=>{recover.disabled=true;await fetch("/api/recover",{method:"POST",headers});state()};state();
 </script></body></html>`))
