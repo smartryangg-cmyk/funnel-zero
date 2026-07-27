@@ -496,10 +496,10 @@ async function setup() {
   const version = runWrangler(["--version"], { quiet: true });
   ok(`Wrangler ${stripAnsi(version.stdout).trim()} detectado`);
 
-  const accountId = await chooseAccount();
+  const previous = readManifest();
+  const accountId = await chooseAccount(previous?.accountId ?? "");
   ok("Cloudflare autenticada");
 
-  const previous = readManifest();
   const installationName = verifyPrefix(
     await prompt("Nome da instalação", previous?.installationName ?? "krano-development"),
     "krano-development"
