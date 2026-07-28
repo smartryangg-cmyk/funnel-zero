@@ -1,2 +1,2 @@
-9e9a10be42ac3bb1164d841107e2fe6dc9608aeae3b612cbdd96a52091f37fd1  krano-installer-linux-x64
-a8607c6f882f7cf23ffdd061d45b2e97e1cbe0a86c219169d6352d7cecac2328  KRANO-Installer-Windows-x64.exe
+6dbe04076c6e1dcc22001e4844e20a339ede79251178e8ec3c47575d63dee949  krano-installer-linux-x64
+14e300f9eb4c90108db5acf79f58348d7aed29f083c500d28e7f578c33d00ee7  KRANO-Installer-Windows-x64.exe

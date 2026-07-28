@@ -30,6 +30,12 @@ describe("configuração open source", () => {
     expect(raw).not.toMatch(/SESSION_SECRET|password_hash|api[_-]?token/i);
   });
 
+  it("mantém a interface monocromática sem reativar o tema vermelho", () => {
+    const css = readFileSync(resolve(root, "apps/web/src/styles.css"), "utf8");
+    expect(css).not.toMatch(/vermelho vibrante|#f00000|#ff3333|#ff2b2b|#b80000/i);
+    expect(css).toContain("Garantias finais do tema monocromático");
+  });
+
   it("oferece instalador de etapa única para todos os sistemas", () => {
     expect(existsSync(resolve(root, "install.mjs"))).toBe(true);
     expect(existsSync(resolve(root, "INSTALAR-KRANO.cmd"))).toBe(true);

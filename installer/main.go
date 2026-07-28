@@ -26,7 +26,7 @@ import (
 )
 
 const (
-	appVersion   = "0.3.1"
+	appVersion   = "0.3.2"
 	repository   = "smartryangg-cmyk/funnel-zero"
 	resultPrefix = "KRANO_RESULT_JSON:"
 )
