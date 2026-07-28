@@ -547,7 +547,7 @@ func (wizard *wizardServer) connectProfile(profile string) {
 		wizard.fail(errors.New("a conta foi autorizada, mas o perfil não pôde ser ativado: " + err.Error()))
 		return
 	}
-	verify := exec.Command(nodePath, wrangler, "--profile", profile, "whoami", "--json")
+	verify := exec.Command(nodePath, wrangler, "whoami", "--json")
 	verify.Dir = wizard.target
 	if output, err := verify.CombinedOutput(); err != nil {
 		wizard.fail(fmt.Errorf("a Cloudflare não confirmou o perfil: %s", strings.TrimSpace(string(output))))

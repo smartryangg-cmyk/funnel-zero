@@ -17,7 +17,7 @@ const configPath = join(projectRoot, "wrangler.jsonc");
 const wranglerBin = join(projectRoot, "node_modules", "wrangler", "bin", "wrangler.js");
 const isWindows = process.platform === "win32";
 const npmCommand = isWindows ? "npm.cmd" : "npm";
-const APP_VERSION = "0.4.2";
+const APP_VERSION = "0.4.3";
 const RESULT_PREFIX = "KRANO_RESULT_JSON:";
 const REQUIRED_WRANGLER_SCOPES = [
   "account:read",
