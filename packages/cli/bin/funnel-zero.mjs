@@ -534,6 +534,7 @@ async function setup() {
   }
 
   const created = { database: false, bucket: false, worker: false };
+  readConfig();
   const originalConfig = readFileSync(configPath, "utf8");
   try {
     mkdirSync(stateDir, { recursive: true });
