@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"crypto/rand"
 	"encoding/hex"
@@ -8,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -21,28 +23,31 @@ import (
 )
 
 type wizardState struct {
-	Status          string                `json:"status"`
-	Step            int                   `json:"step"`
-	Title           string                `json:"title"`
-	Message         string                `json:"message"`
-	Error           string                `json:"error,omitempty"`
-	ActiveID        string                `json:"activeId,omitempty"`
-	ProjectPath     string                `json:"projectPath,omitempty"`
-	TutorialEnabled bool                  `json:"tutorialEnabled"`
-	Profiles        []desktopProfile      `json:"profiles"`
-	Installations   []desktopInstallation `json:"installations"`
-	Vault           []vaultMetadata       `json:"vault"`
+	Status           string                `json:"status"`
+	Operation        string                `json:"operation,omitempty"`
+	Step             int                   `json:"step"`
+	Title            string                `json:"title"`
+	Message          string                `json:"message"`
+	Error            string                `json:"error,omitempty"`
+	AuthorizationURL string                `json:"authorizationUrl,omitempty"`
+	ActiveID         string                `json:"activeId,omitempty"`
+	ProjectPath      string                `json:"projectPath,omitempty"`
+	TutorialEnabled  bool                  `json:"tutorialEnabled"`
+	Profiles         []desktopProfile      `json:"profiles"`
+	Installations    []desktopInstallation `json:"installations"`
+	Vault            []vaultMetadata       `json:"vault"`
 }
 
 type operationRequest struct {
-	ID           string `json:"id"`
-	Name         string `json:"name"`
-	Profile      string `json:"profile"`
-	Confirmation string `json:"confirmation"`
-	PreserveD1   bool   `json:"preserveD1"`
-	PreserveR2   bool   `json:"preserveR2"`
-	RemoveLocal  bool   `json:"removeLocal"`
-	Enabled      *bool  `json:"enabled"`
+	ID             string `json:"id"`
+	Name           string `json:"name"`
+	Profile        string `json:"profile"`
+	Confirmation   string `json:"confirmation"`
+	PreserveD1     bool   `json:"preserveD1"`
+	PreserveR2     bool   `json:"preserveR2"`
+	RemoveLocal    bool   `json:"removeLocal"`
+	Enabled        *bool  `json:"enabled"`
+	ManagedBrowser bool   `json:"managedBrowser"`
 }
 
 type vaultRequest struct {
@@ -177,10 +182,12 @@ func (wizard *wizardServer) begin(response http.ResponseWriter, operation, title
 	wizard.started = true
 	wizard.operation = operation
 	wizard.state.Status = "running"
+	wizard.state.Operation = operation
 	wizard.state.Step = 1
 	wizard.state.Title = title
 	wizard.state.Message = message
 	wizard.state.Error = ""
+	wizard.state.AuthorizationURL = ""
 	wizard.state.ActiveID = item.ID
 	wizard.state.ProjectPath = item.Path
 	return true
@@ -234,7 +241,7 @@ func (wizard *wizardServer) connectRequest(response http.ResponseWriter, request
 	if !wizard.begin(response, "connect", "Conectando Cloudflare", "Autorize a conta na página oficial que será aberta.", item) {
 		return
 	}
-	go wizard.connectProfile(profile)
+	go wizard.connectProfile(profile, input.ManagedBrowser)
 	writeWizardJSON(response, map[string]bool{"ok": true})
 }
 
@@ -512,7 +519,8 @@ func (wizard *wizardServer) runProjectOperation(item desktopInstallation, operat
 	_ = openURL(result.URL)
 }
 
-func (wizard *wizardServer) connectProfile(profile string) {
+func (wizard *wizardServer) connectProfile(profile string, managedBrowser bool) {
+	wizard.update(1, "Preparando conexão segura", "Verificando os componentes necessários para abrir a Cloudflare.")
 	sourceReady, err := isKranoSource(wizard.target)
 	if err != nil {
 		wizard.fail(err)
@@ -536,13 +544,40 @@ func (wizard *wizardServer) connectProfile(profile string) {
 			return
 		}
 	}
-	command := exec.Command(nodePath, wrangler, "auth", "create", profile)
+	commandArgs := []string{wrangler, "auth", "create", profile}
+	if managedBrowser {
+		commandArgs = append(commandArgs, "--no-browser")
+	}
+	command := exec.Command(nodePath, commandArgs...)
 	command.Dir = wizard.target
-	command.Stdout, command.Stderr, command.Stdin = os.Stdout, os.Stderr, os.Stdin
-	if err := command.Run(); err != nil {
+	outputReader, outputWriter := io.Pipe()
+	command.Stdout, command.Stderr = outputWriter, outputWriter
+	if err := command.Start(); err != nil {
+		_ = outputReader.Close()
+		_ = outputWriter.Close()
+		wizard.fail(errors.New("não foi possível iniciar a autorização Cloudflare"))
+		return
+	}
+	wizard.update(2, "Abrindo autorização", "Aguarde enquanto a página oficial da Cloudflare é preparada.")
+	scanDone := make(chan struct{})
+	go func() {
+		defer close(scanDone)
+		scanner := bufio.NewScanner(outputReader)
+		for scanner.Scan() {
+			if authorizationURL := extractWranglerOAuthURL(scanner.Text()); authorizationURL != "" {
+				wizard.authorizationReady(authorizationURL)
+			}
+		}
+	}()
+	runErr := command.Wait()
+	_ = outputWriter.Close()
+	<-scanDone
+	_ = outputReader.Close()
+	if runErr != nil {
 		wizard.fail(errors.New("a autorização Cloudflare não foi concluída"))
 		return
 	}
+	wizard.update(3, "Confirmando a conta", "A autorização foi recebida. Validando o perfil antes de salvar.")
 	if err := activateWranglerProfile(wizard.target, nodePath, profile); err != nil {
 		wizard.fail(errors.New("a conta foi autorizada, mas o perfil não pôde ser ativado: " + err.Error()))
 		return
@@ -622,10 +657,20 @@ func (wizard *wizardServer) update(step int, title, message string) {
 	wizard.mu.Unlock()
 }
 
+func (wizard *wizardServer) authorizationReady(authorizationURL string) {
+	wizard.mu.Lock()
+	wizard.state.Step = 2
+	wizard.state.Title = "Autorize na Cloudflare"
+	wizard.state.Message = "Conclua a autorização na aba aberta. A KRANO retomará automaticamente."
+	wizard.state.AuthorizationURL = authorizationURL
+	wizard.mu.Unlock()
+}
+
 func (wizard *wizardServer) complete(title, message string) {
 	wizard.mu.Lock()
 	wizard.state.Status, wizard.state.Step = "complete", 4
 	wizard.state.Title, wizard.state.Message, wizard.state.Error = title, message, ""
+	wizard.state.AuthorizationURL = ""
 	wizard.started = false
 	wizard.mu.Unlock()
 }
@@ -636,8 +681,32 @@ func (wizard *wizardServer) fail(err error) {
 	wizard.state.Title = "A operação precisa de atenção"
 	wizard.state.Message = "Nada fora da estrutura selecionada foi alterado."
 	wizard.state.Error = err.Error()
+	wizard.state.AuthorizationURL = ""
 	wizard.started = false
 	wizard.mu.Unlock()
+}
+
+func extractWranglerOAuthURL(line string) string {
+	const marker = "Visit this link to authenticate:"
+	index := strings.Index(line, marker)
+	if index < 0 {
+		return ""
+	}
+	candidate := strings.TrimSpace(line[index+len(marker):])
+	if candidate == "" || !strings.HasPrefix(candidate, "https://") {
+		return ""
+	}
+	hostStart := len("https://")
+	hostEnd := strings.IndexByte(candidate[hostStart:], '/')
+	host := candidate[hostStart:]
+	if hostEnd >= 0 {
+		host = candidate[hostStart : hostStart+hostEnd]
+	}
+	host = strings.ToLower(strings.Split(host, ":")[0])
+	if host != "cloudflare.com" && !strings.HasSuffix(host, ".cloudflare.com") {
+		return ""
+	}
+	return candidate
 }
 
 func (wizard *wizardServer) newTarget(name string) string {
@@ -769,6 +838,7 @@ button{border:1px solid var(--line);border-radius:10px;padding:10px 13px;backgro
 dialog{width:min(520px,calc(100% - 30px));border:1px solid var(--line);border-radius:16px;padding:0;background:var(--panel);color:var(--text)}dialog::backdrop{background:#0009}.modal{padding:22px}.modal footer{display:flex;justify-content:flex-end;gap:9px;margin-top:20px}
 label{display:block;margin:14px 0 6px;font-size:12px;font-weight:700}input,select{width:100%;padding:11px;border:1px solid var(--line);border-radius:9px;background:var(--soft);color:var(--text)}.check{display:flex;gap:9px;align-items:center}.check input{width:auto}
 .theme-options{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:16px}.theme-options button{padding:15px;text-align:left}.theme-options button.active{background:var(--accent);color:var(--on);border-color:var(--accent)}.theme-options small{display:block;margin-top:4px;color:var(--muted)}.theme-options button.active small{color:inherit;opacity:.72}
+.connect-progress{display:grid;justify-items:center;gap:8px;padding:24px 8px;text-align:center}.connect-progress[hidden]{display:none}.connect-progress strong{font-size:16px}.spinner{width:34px;height:34px;margin-bottom:5px;border:3px solid var(--line);border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
 @media(max-width:850px){.app{grid-template-columns:1fr}aside{position:static;height:auto;border-right:0;border-bottom:1px solid var(--line)}nav{display:flex;margin:18px 0 0;overflow:auto}.aside-foot{display:none}main{padding:20px}.half,.third{grid-column:span 12}.hero{grid-template-columns:1fr}.structure{grid-template-columns:1fr}}
 </style></head><body><div class="app">
 <aside><div class="brand"><b>K</b>KRANO</div><nav>
@@ -785,24 +855,28 @@ label{display:block;margin:14px 0 6px;font-size:12px;font-weight:700}input,selec
 <section class="view" id="settings"><div class="top"><div><h1>Configurações</h1><p>Aparência e ajuda opcional em um só lugar.</p></div></div><div class="grid"><article class="card half"><h2>Aparência</h2><p>Escolha o tema. A preferência fica salva somente neste computador.</p><div class="theme-options"><button id="theme-dark" type="button"><strong>Escuro</strong><small>Menos brilho</small></button><button id="theme-light" type="button"><strong>Claro</strong><small>Mais contraste</small></button></div></article><article class="card half"><h2>Ajuda para iniciantes</h2><p>As explicações são opcionais e podem ser ocultadas quando você já conhecer o fluxo.</p><label class="check"><input id="tutorial-toggle" type="checkbox"> Mostrar tutoriais e dicas</label></article><article class="card third tutorial-card"><h2>Primeira estrutura</h2><p>Conecte a Cloudflare, crie um nome e aguarde o app publicar Worker, D1 e R2.</p></article><article class="card third tutorial-card"><h2>Hospedagem de vídeo</h2><p>Os arquivos vão para o R2 Standard. O player otimizado é administrado no painel KRANO.</p></article><article class="card third tutorial-card"><h2>Meta Ads</h2><p>Depois do primeiro acesso, conecte a Meta dentro do painel para campanhas, pixels e tracking.</p></article><article class="card tutorial-card"><h2>Custos e cartão</h2><p>A KRANO trabalha em modo FREE_ONLY. O R2 tem franquia gratuita, mas a Cloudflare pode solicitar uma forma de pagamento ao ativar o produto. O app não recebe nem armazena dados de cartão.</p></article></div></section>
 </main></div>
 <dialog id="new-dialog"><form class="modal" method="dialog"><h2>Nova estrutura</h2><p>Use um nome curto e selecione uma conta Cloudflare já conectada.</p><label>Nome da estrutura</label><input id="new-name" placeholder="minha-oferta"><label>Conta Cloudflare</label><select id="new-profile"></select><footer><button value="cancel">Cancelar</button><button class="primary" id="install-new" value="default">Instalar estrutura</button></footer></form></dialog>
-<dialog id="connect-dialog"><form class="modal" method="dialog"><h2>Conectar Cloudflare</h2><p>Será aberta a autorização oficial. Você pode manter vários logins organizados.</p><label>Apelido do perfil</label><input id="profile-name" placeholder="pessoal"><footer><button value="cancel">Cancelar</button><button class="primary" id="connect-go" value="default">Abrir autorização</button></footer></form></dialog>
+<dialog id="connect-dialog"><form class="modal" method="dialog"><h2>Conectar Cloudflare</h2><div id="connect-fields"><p>Será aberta a autorização oficial. Você pode manter vários logins organizados.</p><label>Apelido do perfil</label><input id="profile-name" placeholder="pessoal"></div><div id="connect-progress" class="connect-progress" aria-live="polite" hidden><i class="spinner" aria-hidden="true"></i><strong id="connect-progress-title">Preparando conexão</strong><p id="connect-progress-message">Aguarde um instante.</p></div><footer><button id="connect-cancel" value="cancel">Cancelar</button><button class="primary" id="connect-go" value="default">Abrir autorização</button></footer></form></dialog>
 <dialog id="remove-dialog"><form class="modal" method="dialog"><h2>Remover estrutura</h2><p>Esta ação apaga recursos na Cloudflare. Faça backup antes se precisar dos dados.</p><label class="check"><input id="preserve-d1" type="checkbox" checked> Preservar banco D1</label><label class="check"><input id="preserve-r2" type="checkbox" checked> Preservar vídeos no R2</label><label class="check"><input id="remove-local" type="checkbox"> Apagar também a pasta local</label><label id="confirm-label">Confirmação</label><input id="remove-confirm"><footer><button value="cancel">Cancelar</button><button class="danger" id="remove-go" value="default">Remover</button></footer></form></dialog>
 <dialog id="vault-dialog"><form class="modal" method="dialog"><h2>Credencial do painel</h2><p>Preencha apenas se quiser usar o cofre local.</p><label>Login ou e-mail</label><input id="vault-login" autocomplete="username"><label>Senha</label><div class="row" style="flex-wrap:nowrap"><input id="vault-password" type="password" autocomplete="current-password"><button id="vault-reveal" type="button">Mostrar</button><button id="vault-copy" type="button">Copiar</button></div><label>Recuperação ou observação opcional</label><input id="vault-recovery"><footer><button id="vault-delete" class="danger" type="button" hidden>Apagar</button><button value="cancel">Cancelar</button><button class="primary" id="vault-save" value="default">Salvar no Windows</button></footer></form></dialog>
 <script>
-const token=new URLSearchParams(location.search).get("token")||"",headers={"X-Krano-Token":token,"Content-Type":"application/json"};let current=null,removeId="",vaultId="";
+const token=new URLSearchParams(location.search).get("token")||"",headers={"X-Krano-Token":token,"Content-Type":"application/json"};let current=null,removeId="",vaultId="",authWindow=null,openedAuthorizationURL="";
 const $=s=>document.querySelector(s),esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 function applyTheme(theme){const next=theme==="light"?"light":"dark";document.documentElement.dataset.theme=next;try{localStorage.setItem("krano-desktop-theme",next)}catch{};$("#theme-dark")?.classList.toggle("active",next==="dark");$("#theme-light")?.classList.toggle("active",next==="light")}
 let savedTheme="";try{savedTheme=localStorage.getItem("krano-desktop-theme")||""}catch{};applyTheme(savedTheme||((window.matchMedia&&window.matchMedia("(prefers-color-scheme: light)").matches)?"light":"dark"));
+function setConnectPending(pending,title="Preparando conexão",message="Aguarde um instante."){$("#connect-fields").hidden=pending;$("#connect-progress").hidden=!pending;$("#connect-progress-title").textContent=title;$("#connect-progress-message").textContent=message;$("#connect-go").hidden=pending;$("#connect-cancel").disabled=pending;$("#profile-name").disabled=pending}
+function closeAuthorizationWindow(){try{if(authWindow&&!authWindow.closed)authWindow.close()}catch{}authWindow=null;openedAuthorizationURL=""}
+function openAuthorizationURL(url){if(!authWindow||authWindow.closed||!url||openedAuthorizationURL===url)return;try{authWindow.location.replace(url);openedAuthorizationURL=url}catch{}}
 async function api(path,body={}){const r=await fetch(path,{method:"POST",headers,body:JSON.stringify(body)});if(!r.ok)throw new Error(await r.text());return r.json()}
 function card(i){const installed=i.status==="installed";return '<div class="structure"><div><h3>'+esc(i.name)+'</h3><p>'+esc(installed?i.workerUrl:"Ainda não instalada")+'</p><div class="meta"><span>'+esc(i.profile||"perfil padrão")+'</span><span>'+esc(i.version||"nova")+'</span><span>'+esc(i.path)+'</span></div></div><div class="row">'+(installed?'<button data-open="'+esc(i.id)+'">Abrir</button><button data-update="'+esc(i.id)+'">Atualizar</button><button data-recover="'+esc(i.id)+'">Recuperar</button><button class="danger" data-remove="'+esc(i.id)+'">Remover</button>':'<button class="primary" data-update="'+esc(i.id)+'">Instalar</button>')+'</div></div>'}
 function bind(){document.querySelectorAll("[data-open]").forEach(b=>b.onclick=()=>api("/api/open",{id:b.dataset.open}));document.querySelectorAll("[data-update]").forEach(b=>b.onclick=()=>api("/api/install",{id:b.dataset.update}).then(poll).catch(showError));document.querySelectorAll("[data-recover]").forEach(b=>b.onclick=()=>api("/api/recover",{id:b.dataset.recover}).then(poll).catch(showError));document.querySelectorAll("[data-remove]").forEach(b=>b.onclick=()=>{removeId=b.dataset.remove;const i=current.installations.find(x=>x.id===removeId);$("#confirm-label").textContent="Digite REMOVER "+i.name;$("#remove-confirm").value="";$("#remove-dialog").showModal()})}
 function vaultCard(i){const saved=(current.vault||[]).find(v=>v.installationId===i.id);return '<div class="structure"><div><h3>'+esc(i.name)+'</h3><p>'+(saved?'Credencial protegida · atualizada '+esc(new Date(saved.updatedAt).toLocaleString("pt-BR")):'Nenhuma credencial salva')+'</p></div><div class="row"><button data-vault="'+esc(i.id)+'">'+(saved?'Abrir cofre':'Adicionar login')+'</button></div></div>'}
-function render(s){current=s;const html=s.installations.length?s.installations.map(card).join(""):'<p>Nenhuma estrutura ainda. Crie a primeira em poucos cliques.</p>';$("#home-structures").innerHTML=html;$("#all-structures").innerHTML=html;$("#summary").textContent=s.installations.filter(i=>i.status==="installed").length+" estrutura(s) instalada(s)";$("#tutorial-toggle").checked=s.tutorialEnabled;document.querySelectorAll(".tutorial-card").forEach(x=>x.hidden=!s.tutorialEnabled);const profiles=s.profiles||[];$("#profiles").innerHTML=profiles.length?profiles.map(p=>'<div class="structure"><div><strong>'+esc(p.name)+'</strong><p>Conta autorizada no navegador</p></div><span class="pill"><i class="dot"></i>CONECTADA</span></div>').join(""):'<p>Nenhuma conta conectada. Clique em “Conectar conta”.</p>';$("#new-profile").innerHTML=profiles.length?profiles.map(p=>'<option value="'+esc(p.name)+'">'+esc(p.name)+'</option>').join(""):'<option value="">Conecte uma conta primeiro</option>';$("#install-new").disabled=!profiles.length;$("#vault-list").innerHTML=s.installations.length?s.installations.map(vaultCard).join(""):'<p>Crie uma estrutura antes de adicionar credenciais.</p>';const box=$("#status");box.classList.toggle("show",s.status==="running"||s.status==="error"||s.status==="complete");box.classList.toggle("error",s.status==="error");$("#status-title").textContent=s.title;$("#status-message").textContent=s.message;$("#status-step").textContent=s.status==="running"?"Etapa "+s.step+" de 4":"";$("#status-error").textContent=s.error||"";$("#status-progress").style.width=(s.step*25)+"%";bind();document.querySelectorAll("[data-vault]").forEach(b=>b.onclick=()=>openVault(b.dataset.vault));applyTheme(document.documentElement.dataset.theme)}
+function syncConnectFlow(s){if(s.operation!=="connect")return;const dialog=$("#connect-dialog");if(s.status==="running"){if(!dialog.open)dialog.showModal();setConnectPending(true,s.title,s.message);openAuthorizationURL(s.authorizationUrl);return}if(s.status==="complete"){closeAuthorizationWindow();setConnectPending(false);$("#profile-name").value="";if(dialog.open)dialog.close();return}if(s.status==="error"){closeAuthorizationWindow();setConnectPending(false);if(!dialog.open)dialog.showModal()}}
+function render(s){current=s;const html=s.installations.length?s.installations.map(card).join(""):'<p>Nenhuma estrutura ainda. Crie a primeira em poucos cliques.</p>';$("#home-structures").innerHTML=html;$("#all-structures").innerHTML=html;$("#summary").textContent=s.installations.filter(i=>i.status==="installed").length+" estrutura(s) instalada(s)";$("#tutorial-toggle").checked=s.tutorialEnabled;document.querySelectorAll(".tutorial-card").forEach(x=>x.hidden=!s.tutorialEnabled);const profiles=s.profiles||[];$("#profiles").innerHTML=profiles.length?profiles.map(p=>'<div class="structure"><div><strong>'+esc(p.name)+'</strong><p>Conta autorizada no navegador</p></div><span class="pill"><i class="dot"></i>CONECTADA</span></div>').join(""):'<p>Nenhuma conta conectada. Clique em “Conectar conta”.</p>';$("#new-profile").innerHTML=profiles.length?profiles.map(p=>'<option value="'+esc(p.name)+'">'+esc(p.name)+'</option>').join(""):'<option value="">Conecte uma conta primeiro</option>';$("#install-new").disabled=!profiles.length;$("#vault-list").innerHTML=s.installations.length?s.installations.map(vaultCard).join(""):'<p>Crie uma estrutura antes de adicionar credenciais.</p>';const box=$("#status");box.classList.toggle("show",s.status==="running"||s.status==="error"||s.status==="complete");box.classList.toggle("error",s.status==="error");$("#status-title").textContent=s.title;$("#status-message").textContent=s.message;$("#status-step").textContent=s.status==="running"?"Etapa "+s.step+" de 4":"";$("#status-error").textContent=s.error||"";$("#status-progress").style.width=(s.step*25)+"%";bind();document.querySelectorAll("[data-vault]").forEach(b=>b.onclick=()=>openVault(b.dataset.vault));applyTheme(document.documentElement.dataset.theme);syncConnectFlow(s)}
 async function openVault(id){vaultId=id;$("#vault-login").value="";$("#vault-password").value="";$("#vault-recovery").value="";$("#vault-password").type="password";$("#vault-reveal").textContent="Mostrar";const saved=(current.vault||[]).some(v=>v.installationId===id);$("#vault-delete").hidden=!saved;if(saved){const secret=await api("/api/vault/read",{id});$("#vault-login").value=secret.login;$("#vault-password").value=secret.password;$("#vault-recovery").value=secret.recovery||""}$("#vault-dialog").showModal()}
 async function state(){const r=await fetch("/api/state?token="+encodeURIComponent(token),{headers});render(await r.json())}
 function poll(){state().then(()=>{if(current.status==="running")setTimeout(poll,1200)})}function showError(e){alert(e.message)}
-document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{document.querySelectorAll("nav button,.view").forEach(x=>x.classList.remove("active"));b.classList.add("active");$("#"+b.dataset.view).classList.add("active")});document.querySelectorAll("[data-new]").forEach(b=>b.onclick=()=>{if(!(current?.profiles||[]).length){document.querySelector('[data-view="accounts"]').click();$("#connect-dialog").showModal();return}$("#new-dialog").showModal()});document.querySelectorAll("[data-guide]").forEach(b=>b.onclick=()=>document.querySelector('[data-view="settings"]').click());
-$("#connect").onclick=()=>$("#connect-dialog").showModal();$("#install-new").onclick=e=>{e.preventDefault();api("/api/install",{name:$("#new-name").value,profile:$("#new-profile").value}).then(()=>{$("#new-dialog").close();poll()}).catch(showError)};$("#connect-go").onclick=e=>{e.preventDefault();api("/api/connect",{profile:$("#profile-name").value}).then(()=>{$("#connect-dialog").close();poll()}).catch(showError)};$("#remove-go").onclick=e=>{e.preventDefault();api("/api/remove",{id:removeId,confirmation:$("#remove-confirm").value,preserveD1:$("#preserve-d1").checked,preserveR2:$("#preserve-r2").checked,removeLocal:$("#remove-local").checked}).then(()=>{$("#remove-dialog").close();poll()}).catch(showError)};$("#tutorial-toggle").onchange=e=>api("/api/tutorial",{enabled:e.target.checked}).catch(showError);
+document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{document.querySelectorAll("nav button,.view").forEach(x=>x.classList.remove("active"));b.classList.add("active");$("#"+b.dataset.view).classList.add("active")});document.querySelectorAll("[data-new]").forEach(b=>b.onclick=()=>{if(!(current?.profiles||[]).length){document.querySelector('[data-view="accounts"]').click();setConnectPending(false);$("#connect-dialog").showModal();return}$("#new-dialog").showModal()});document.querySelectorAll("[data-guide]").forEach(b=>b.onclick=()=>document.querySelector('[data-view="settings"]').click());
+$("#connect").onclick=()=>{setConnectPending(false);$("#connect-dialog").showModal()};$("#install-new").onclick=e=>{e.preventDefault();api("/api/install",{name:$("#new-name").value,profile:$("#new-profile").value}).then(()=>{$("#new-dialog").close();poll()}).catch(showError)};$("#connect-go").onclick=e=>{e.preventDefault();const profile=$("#profile-name").value.trim();if(!profile){showError(new Error("Informe um apelido para a conta."));return}openedAuthorizationURL="";authWindow=window.open("about:blank","krano-cloudflare-auth");try{if(authWindow){authWindow.document.title="Conectando Cloudflare";authWindow.document.body.innerHTML='<main style="font:16px system-ui;padding:40px;color:#222"><h1>Preparando Cloudflare…</h1><p>Esta página será redirecionada para a autorização oficial.</p></main>'}}catch{}setConnectPending(true,"Preparando conexão","A KRANO está preparando a autorização oficial.");api("/api/connect",{profile,managedBrowser:Boolean(authWindow)}).then(poll).catch(error=>{closeAuthorizationWindow();setConnectPending(false);showError(error)})};$("#remove-go").onclick=e=>{e.preventDefault();api("/api/remove",{id:removeId,confirmation:$("#remove-confirm").value,preserveD1:$("#preserve-d1").checked,preserveR2:$("#preserve-r2").checked,removeLocal:$("#remove-local").checked}).then(()=>{$("#remove-dialog").close();poll()}).catch(showError)};$("#tutorial-toggle").onchange=e=>api("/api/tutorial",{enabled:e.target.checked}).catch(showError);
 $("#vault-reveal").onclick=()=>{const show=$("#vault-password").type==="password";$("#vault-password").type=show?"text":"password";$("#vault-reveal").textContent=show?"Ocultar":"Mostrar"};$("#vault-copy").onclick=()=>navigator.clipboard.writeText($("#vault-password").value).then(()=>{$("#vault-copy").textContent="Copiada";setTimeout(()=>$("#vault-copy").textContent="Copiar",1200)}).catch(showError);$("#vault-save").onclick=e=>{e.preventDefault();api("/api/vault/save",{id:vaultId,login:$("#vault-login").value,password:$("#vault-password").value,recovery:$("#vault-recovery").value}).then(()=>{$("#vault-dialog").close();state()}).catch(showError)};$("#vault-delete").onclick=()=>{if(!confirm("Apagar esta credencial do cofre local?"))return;api("/api/vault/delete",{id:vaultId,confirmation:"APAGAR CREDENCIAL"}).then(()=>{$("#vault-dialog").close();state()}).catch(showError)};
 $("#theme-dark").onclick=()=>applyTheme("dark");$("#theme-light").onclick=()=>applyTheme("light");state();
 $("#exit").onclick=()=>api("/api/exit").then(()=>{document.body.innerHTML='<main style="padding:40px"><h1>KRANO encerrada</h1><p>Você pode fechar esta aba.</p></main>'}).catch(showError);

@@ -197,7 +197,7 @@ func TestExtractTarGzPreservesSafeNodeSymlinksOnLinux(t *testing.T) {
 }
 
 func TestParseCLIResultUsesStructuredSignal(t *testing.T) {
-	output := "progresso\n" + resultPrefix + `{"ok":true,"action":"onboarding","url":"https://krano.example/setup?token=abc","recoveryFile":"C:\\KRANO\\.funnel-zero\\setup-url.txt","version":"0.4.3"}` + "\n"
+	output := "progresso\n" + resultPrefix + `{"ok":true,"action":"onboarding","url":"https://krano.example/setup?token=abc","recoveryFile":"C:\\KRANO\\.funnel-zero\\setup-url.txt","version":"0.4.4"}` + "\n"
 	result, err := parseCLIResult(output)
 	if err != nil {
 		t.Fatalf("valid result was rejected: %v", err)
@@ -225,5 +225,15 @@ func TestInstallerLogRedactsOneTimeTokens(t *testing.T) {
 	}
 	if !strings.Contains(redacted, "token=[REDACTED]") {
 		t.Fatalf("expected redaction marker, received %q", redacted)
+	}
+}
+
+func TestExtractWranglerOAuthURL(t *testing.T) {
+	valid := "Visit this link to authenticate: https://dash.cloudflare.com/oauth2/auth?state=abc"
+	if got := extractWranglerOAuthURL(valid); got != "https://dash.cloudflare.com/oauth2/auth?state=abc" {
+		t.Fatalf("unexpected OAuth URL: %q", got)
+	}
+	if got := extractWranglerOAuthURL("Visit this link to authenticate: https://example.com/phishing"); got != "" {
+		t.Fatalf("non-Cloudflare URL must be rejected: %q", got)
 	}
 }

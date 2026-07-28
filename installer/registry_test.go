@@ -14,7 +14,7 @@ func TestDiscoverInstallationReadsManifest(t *testing.T) {
 	}
 	manifest := `{
 	  "schemaVersion": 1,
-	  "appVersion": "0.4.3",
+	  "appVersion": "0.4.4",
 	  "installationName": "krano-teste",
 	  "accountId": "account-1",
 	  "worker": {"name":"krano-teste","url":"https://krano-teste.example.workers.dev"},
