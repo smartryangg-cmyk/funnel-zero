@@ -43,20 +43,20 @@ Git, Node.js, Wrangler ou Docker.
 **Windows 64 bits**
 
 1. Baixe a versão mais recente em [`KRANO-Installer-Windows-x64.exe`](https://github.com/smartryangg-cmyk/funnel-zero/releases/latest/download/KRANO-Installer-Windows-x64.exe).
-2. Dê dois cliques para abrir o assistente visual da KRANO.
-3. Autorize sua conta na página oficial da Cloudflare quando o assistente solicitar.
-4. Ao final, o aplicativo abre automaticamente o cadastro inicial no navegador e
-   salva o endereço de continuação em `KRANO/.funnel-zero/setup-url.txt`.
+2. Dê dois cliques para abrir o **KRANO Desktop**.
+3. Crie um perfil e autorize a conta na página oficial da Cloudflare.
+4. Clique em **Nova estrutura**. O app prepara Worker, D1 e R2 e abre o cadastro inicial.
 5. No painel, abra **Meta Ads** e conecte o perfil que administra seus anúncios.
 
-Nas próximas execuções, o mesmo aplicativo reconhece a instalação e oferece
-**Abrir painel** sem repetir o processo.
+O KRANO Desktop permanece aberto como central local. Nas próximas execuções ele
+lista todas as estruturas e oferece **abrir, atualizar, recuperar e remover**,
+além de perfis OAuth separados para múltiplas contas Cloudflare.
 
 O arquivo correto tem aproximadamente **9,2 MB**. Se o download tiver apenas
 alguns KB, ele é uma página HTML do GitHub e não deve ser executado. Os hashes
 oficiais estão em [`installers/SHA256SUMS.txt`](./installers/SHA256SUMS.txt).
 
-Cada atualização também fica preservada em [GitHub Releases](https://github.com/smartryangg-cmyk/funnel-zero/releases), com a versão no nome do instalador, por exemplo `KRANO-Installer-v0.3.0-Windows-x64.exe`. Os arquivos sem versão no nome são apenas atalhos para a versão mais recente.
+Cada atualização também fica preservada em [GitHub Releases](https://github.com/smartryangg-cmyk/funnel-zero/releases), com a versão no nome do app, por exemplo `KRANO-Installer-v0.4.0-Windows-x64.exe`. Os arquivos sem versão no nome são apenas atalhos para a versão mais recente.
 
 **Linux 64 bits**
 

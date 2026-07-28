@@ -48,7 +48,7 @@ describe("configuração open source", () => {
       encoding: "utf8"
     });
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain("instalador de etapa única");
+    expect(result.stdout).toContain("aplicativo desktop de instalação e gerenciamento");
   });
 
   it("gera os tipos Cloudflare antes de validar ou construir um clone limpo", () => {

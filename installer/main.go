@@ -26,7 +26,7 @@ import (
 )
 
 const (
-	appVersion   = "0.3.2"
+	appVersion   = "0.4.0"
 	repository   = "smartryangg-cmyk/funnel-zero"
 	resultPrefix = "KRANO_RESULT_JSON:"
 )
@@ -53,12 +53,14 @@ func main() {
 	var dryRun bool
 	var showVersion bool
 	var consoleMode bool
+	var appMode bool
 	var nonInteractive bool
 	flag.StringVar(&target, "target", "", "pasta onde a KRANO será instalada")
 	flag.StringVar(&branch, "branch", defaultBranch, "ramo do GitHub a instalar")
 	flag.BoolVar(&dryRun, "dry-run", false, "mostra o plano sem baixar ou alterar arquivos")
 	flag.BoolVar(&showVersion, "version", false, "mostra a versão do instalador")
 	flag.BoolVar(&consoleMode, "cli", false, "usa o instalador no terminal")
+	flag.BoolVar(&appMode, "app", false, "abre a central desktop de gerenciamento")
 	flag.BoolVar(&nonInteractive, "yes", false, "confirma automaticamente as etapas seguras")
 	flag.Usage = printHelp
 	normalizedArgs, recoveryMode := normalizeInstallerArgs(os.Args[1:])
@@ -85,7 +87,7 @@ func main() {
 	if err != nil {
 		fatal(err)
 	}
-	if runtime.GOOS == "windows" && launchedFromExplorer() && !consoleMode && !dryRun {
+	if runtime.GOOS == "windows" && (appMode || launchedFromExplorer()) && !consoleMode && !dryRun {
 		hideConsoleWindow()
 		if err := runWizard(resolvedTarget, branch, projectArgs); err != nil {
 			fatalf("não foi possível abrir o assistente: %v", err)

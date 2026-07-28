@@ -6,7 +6,11 @@ Os dois arquivos prontos ficam nesta pasta:
 - `krano-installer-linux-x64`
 - `SHA256SUMS.txt`
 
-Eles baixam o projeto oficial, preparam uma versão portátil e verificada do Node.js quando necessário e iniciam a autorização oficial da Cloudflare. Git, Node, Wrangler e Docker não precisam ser instalados manualmente.
+O executável Windows abre o KRANO Desktop: um app local persistente para conectar
+perfis OAuth Cloudflare, instalar várias estruturas, abrir o painel, atualizar,
+recuperar acesso e remover recursos com confirmação explícita. Ele prepara uma
+versão portátil e verificada do Node.js quando necessário. Git, Node, Wrangler e
+Docker não precisam ser instalados manualmente.
 
 ## Compilar
 

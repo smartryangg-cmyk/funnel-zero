@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -10,32 +11,42 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
 )
 
 type wizardState struct {
-	Status      string `json:"status"`
-	Step        int    `json:"step"`
-	Title       string `json:"title"`
-	Message     string `json:"message"`
-	PanelURL    string `json:"panelUrl,omitempty"`
-	Installed   bool   `json:"installed"`
-	Error       string `json:"error,omitempty"`
-	ProjectPath string `json:"projectPath"`
+	Status          string                `json:"status"`
+	Step            int                   `json:"step"`
+	Title           string                `json:"title"`
+	Message         string                `json:"message"`
+	Error           string                `json:"error,omitempty"`
+	ActiveID        string                `json:"activeId,omitempty"`
+	ProjectPath     string                `json:"projectPath,omitempty"`
+	TutorialEnabled bool                  `json:"tutorialEnabled"`
+	Installations   []desktopInstallation `json:"installations"`
 }
 
-type savedInstallation struct {
-	Worker struct {
-		URL string `json:"url"`
-	} `json:"worker"`
+type operationRequest struct {
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	Profile      string `json:"profile"`
+	Confirmation string `json:"confirmation"`
+	PreserveD1   bool   `json:"preserveD1"`
+	PreserveR2   bool   `json:"preserveR2"`
+	RemoveLocal  bool   `json:"removeLocal"`
+	Enabled      *bool  `json:"enabled"`
 }
 
 type wizardServer struct {
 	mu        sync.RWMutex
 	state     wizardState
+	registry  desktopRegistry
 	token     string
 	target    string
 	branch    string
@@ -46,53 +57,48 @@ type wizardServer struct {
 }
 
 func runWizard(target, branch string, args []string) error {
-	panelURL := installedPanelURL(target)
-	initial := wizardState{
-		Status:      "ready",
-		Step:        0,
-		Title:       "Tudo pronto para começar",
-		Message:     "A instalação acontece em poucos passos e usa as páginas oficiais da Cloudflare e da Meta.",
-		PanelURL:    panelURL,
-		Installed:   panelURL != "",
-		ProjectPath: target,
+	registry, err := loadDesktopRegistry(target)
+	if err != nil {
+		return err
 	}
-	if panelURL != "" {
-		initial.Title = "Sua KRANO já está instalada"
-		initial.Message = "Abra o painel ou execute novamente para aplicar atualizações."
+	_ = saveDesktopRegistry(registry)
+	initial := wizardState{
+		Status:          "ready",
+		Title:           "Sua central KRANO",
+		Message:         "Instale e gerencie estruturas Cloudflare sem depender do terminal.",
+		TutorialEnabled: registry.TutorialEnabled,
+		Installations:   registry.Installations,
 	}
 
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return err
 	}
-	server := &http.Server{
-		ReadHeaderTimeout: 5 * time.Second,
-		IdleTimeout:       30 * time.Second,
-	}
 	wizard := &wizardServer{
-		state:  initial,
-		token:  randomTokenForWizard(),
-		target: target,
-		branch: branch,
-		args:   append([]string(nil), args...),
+		state: initial, registry: registry, token: randomTokenForWizard(),
+		target: target, branch: branch, args: append([]string(nil), args...),
 	}
-	wizard.shutdown = func() {
-		_ = server.Close()
-	}
-
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", wizard.page)
 	mux.HandleFunc("/api/state", wizard.readState)
-	mux.HandleFunc("/api/start", wizard.start)
-	mux.HandleFunc("/api/recover", wizard.recoverAccess)
-	mux.HandleFunc("/api/open", wizard.openPanel)
-	server.Handler = mux
-
+	mux.HandleFunc("/api/install", wizard.installRequest)
+	mux.HandleFunc("/api/connect", wizard.connectRequest)
+	mux.HandleFunc("/api/open", wizard.openRequest)
+	mux.HandleFunc("/api/recover", wizard.recoverRequest)
+	mux.HandleFunc("/api/remove", wizard.removeRequest)
+	mux.HandleFunc("/api/tutorial", wizard.tutorialRequest)
+	mux.HandleFunc("/api/exit", wizard.exitRequest)
+	server := &http.Server{
+		Handler: mux, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 90 * time.Second,
+	}
+	wizard.shutdown = func() { _ = server.Close() }
 	localURL := fmt.Sprintf("http://%s/?token=%s", listener.Addr().String(), wizard.token)
 	if err := openURL(localURL); err != nil {
 		_ = listener.Close()
 		return err
 	}
+	// This is a desktop control center: it intentionally remains alive until the
+	// user closes the executable or Windows ends the process.
 	err = server.Serve(listener)
 	if errors.Is(err, http.ErrServerClosed) {
 		return nil
@@ -114,7 +120,7 @@ func (wizard *wizardServer) page(response http.ResponseWriter, request *http.Req
 	response.Header().Set("Cache-Control", "no-store")
 	response.Header().Set("X-Content-Type-Options", "nosniff")
 	response.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'")
-	_ = wizardTemplate.Execute(response, map[string]string{"Token": wizard.token})
+	_ = wizardTemplate.Execute(response, map[string]string{"Token": wizard.token, "Version": appVersion})
 }
 
 func (wizard *wizardServer) readState(response http.ResponseWriter, request *http.Request) {
@@ -122,161 +128,466 @@ func (wizard *wizardServer) readState(response http.ResponseWriter, request *htt
 		http.NotFound(response, request)
 		return
 	}
-	wizard.mu.RLock()
+	wizard.mu.Lock()
+	wizard.registry.refresh()
+	wizard.state.Installations = append([]desktopInstallation(nil), wizard.registry.Installations...)
 	state := wizard.state
-	wizard.mu.RUnlock()
+	wizard.mu.Unlock()
 	writeWizardJSON(response, state)
 }
 
-func (wizard *wizardServer) start(response http.ResponseWriter, request *http.Request) {
-	wizard.beginOperation(response, request, "setup")
-}
-
-func (wizard *wizardServer) recoverAccess(response http.ResponseWriter, request *http.Request) {
-	wizard.beginOperation(response, request, "recover")
-}
-
-func (wizard *wizardServer) beginOperation(response http.ResponseWriter, request *http.Request, operation string) {
+func (wizard *wizardServer) decode(response http.ResponseWriter, request *http.Request) (operationRequest, bool) {
 	if request.Method != http.MethodPost || !wizard.authorized(request) {
 		http.NotFound(response, request)
-		return
+		return operationRequest{}, false
 	}
+	var input operationRequest
+	if err := json.NewDecoder(http.MaxBytesReader(response, request.Body, 16<<10)).Decode(&input); err != nil {
+		http.Error(response, "Pedido inválido.", http.StatusBadRequest)
+		return operationRequest{}, false
+	}
+	return input, true
+}
+
+func (wizard *wizardServer) begin(response http.ResponseWriter, operation, title, message string, item desktopInstallation) bool {
 	wizard.mu.Lock()
+	defer wizard.mu.Unlock()
 	if wizard.started {
-		wizard.mu.Unlock()
-		writeWizardJSON(response, map[string]bool{"ok": true})
-		return
+		http.Error(response, "Aguarde a operação atual terminar.", http.StatusConflict)
+		return false
 	}
 	wizard.started = true
 	wizard.operation = operation
-	title := "Preparando a KRANO"
-	message := "Baixando o projeto oficial e verificando o computador."
-	if operation == "recover" {
-		title = "Preparando recuperação segura"
-		message = "Validando sua instalação e criando um link temporário de uso único."
+	wizard.state.Status = "running"
+	wizard.state.Step = 1
+	wizard.state.Title = title
+	wizard.state.Message = message
+	wizard.state.Error = ""
+	wizard.state.ActiveID = item.ID
+	wizard.state.ProjectPath = item.Path
+	return true
+}
+
+func (wizard *wizardServer) installRequest(response http.ResponseWriter, request *http.Request) {
+	input, ok := wizard.decode(response, request)
+	if !ok {
+		return
 	}
-	wizard.state = wizardState{
-		Status: "running", Step: 1, Title: title,
-		Message:     message,
-		ProjectPath: wizard.target,
+	name := normalizeStructureName(input.Name)
+	profile := normalizeProfileName(input.Profile)
+	var item desktopInstallation
+	if input.ID != "" {
+		wizard.mu.RLock()
+		item, ok = wizard.registry.findInstallation(input.ID)
+		wizard.mu.RUnlock()
+		if !ok {
+			http.Error(response, "Estrutura não encontrada.", http.StatusNotFound)
+			return
+		}
+		if profile != "" {
+			item.Profile = profile
+		}
+	} else {
+		if name == "" {
+			http.Error(response, "Informe um nome válido.", http.StatusBadRequest)
+			return
+		}
+		item = discoverInstallation(wizard.newTarget(name), profile)
+		item.Name = name
 	}
-	wizard.mu.Unlock()
-	go wizard.install()
+	if !wizard.begin(response, "install", "Preparando a estrutura", "Verificando o computador e a conta Cloudflare.", item) {
+		return
+	}
+	go wizard.install(item)
 	writeWizardJSON(response, map[string]bool{"ok": true})
 }
 
-func (wizard *wizardServer) openPanel(response http.ResponseWriter, request *http.Request) {
-	if request.Method != http.MethodPost || !wizard.authorized(request) {
-		http.NotFound(response, request)
+func (wizard *wizardServer) connectRequest(response http.ResponseWriter, request *http.Request) {
+	input, ok := wizard.decode(response, request)
+	if !ok {
+		return
+	}
+	profile := normalizeProfileName(input.Profile)
+	if profile == "" {
+		http.Error(response, "Informe um nome para a conta.", http.StatusBadRequest)
+		return
+	}
+	item := discoverInstallation(wizard.target, profile)
+	if !wizard.begin(response, "connect", "Conectando Cloudflare", "Autorize a conta na página oficial que será aberta.", item) {
+		return
+	}
+	go wizard.connectProfile(profile)
+	writeWizardJSON(response, map[string]bool{"ok": true})
+}
+
+func (wizard *wizardServer) openRequest(response http.ResponseWriter, request *http.Request) {
+	input, ok := wizard.decode(response, request)
+	if !ok {
 		return
 	}
 	wizard.mu.RLock()
-	panelURL := wizard.state.PanelURL
+	item, found := wizard.registry.findInstallation(input.ID)
 	wizard.mu.RUnlock()
-	if panelURL == "" {
-		http.Error(response, "Painel ainda indisponível.", http.StatusConflict)
+	if !found || item.WorkerURL == "" {
+		http.Error(response, "Painel indisponível.", http.StatusNotFound)
 		return
 	}
-	if err := openURL(panelURL); err != nil {
+	if err := openURL(strings.TrimRight(item.WorkerURL, "/") + "/login"); err != nil {
 		http.Error(response, "Não foi possível abrir o navegador.", http.StatusInternalServerError)
 		return
 	}
 	writeWizardJSON(response, map[string]bool{"ok": true})
+}
+
+func (wizard *wizardServer) recoverRequest(response http.ResponseWriter, request *http.Request) {
+	input, ok := wizard.decode(response, request)
+	if !ok {
+		return
+	}
+	wizard.mu.RLock()
+	item, found := wizard.registry.findInstallation(input.ID)
+	wizard.mu.RUnlock()
+	if !found || item.Status != "installed" {
+		http.Error(response, "Estrutura não encontrada.", http.StatusNotFound)
+		return
+	}
+	if !wizard.begin(response, "recover", "Recuperando o acesso", "Validando a conta e criando um link temporário.", item) {
+		return
+	}
+	go wizard.runProjectOperation(item, "recover")
+	writeWizardJSON(response, map[string]bool{"ok": true})
+}
+
+func (wizard *wizardServer) removeRequest(response http.ResponseWriter, request *http.Request) {
+	input, ok := wizard.decode(response, request)
+	if !ok {
+		return
+	}
+	wizard.mu.RLock()
+	item, found := wizard.registry.findInstallation(input.ID)
+	wizard.mu.RUnlock()
+	if !found || item.Status != "installed" {
+		http.Error(response, "Estrutura não encontrada.", http.StatusNotFound)
+		return
+	}
+	if input.Confirmation != "REMOVER "+item.Name {
+		http.Error(response, "A confirmação não corresponde ao nome da estrutura.", http.StatusBadRequest)
+		return
+	}
+	if !wizard.begin(response, "remove", "Removendo com segurança", "A Cloudflare apagará somente os recursos descritos no manifesto local.", item) {
+		return
+	}
+	go wizard.remove(item, input)
+	writeWizardJSON(response, map[string]bool{"ok": true})
+}
+
+func (wizard *wizardServer) tutorialRequest(response http.ResponseWriter, request *http.Request) {
+	input, ok := wizard.decode(response, request)
+	if !ok || input.Enabled == nil {
+		return
+	}
+	wizard.mu.Lock()
+	wizard.registry.TutorialEnabled = *input.Enabled
+	wizard.registry.OnboardingSeen = true
+	wizard.state.TutorialEnabled = *input.Enabled
+	err := saveDesktopRegistry(wizard.registry)
+	wizard.mu.Unlock()
+	if err != nil {
+		http.Error(response, "Não foi possível salvar a preferência.", http.StatusInternalServerError)
+		return
+	}
+	writeWizardJSON(response, map[string]bool{"ok": true})
+}
+
+func (wizard *wizardServer) exitRequest(response http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost || !wizard.authorized(request) {
+		http.NotFound(response, request)
+		return
+	}
+	writeWizardJSON(response, map[string]bool{"ok": true})
 	go func() {
-		time.Sleep(2 * time.Second)
+		time.Sleep(150 * time.Millisecond)
 		wizard.shutdown()
 	}()
 }
 
-func (wizard *wizardServer) install() {
-	update := func(step int, title, message string) {
-		wizard.mu.Lock()
-		wizard.state.Step = step
-		wizard.state.Title = title
-		wizard.state.Message = message
-		wizard.mu.Unlock()
+func (wizard *wizardServer) install(item desktopInstallation) {
+	sourceReady, err := isKranoSource(item.Path)
+	if err != nil {
+		wizard.fail(err)
+		return
 	}
-	fail := func(err error) {
-		wizard.mu.Lock()
-		wizard.state.Status = "error"
-		wizard.state.Title = "A instalação precisa de atenção"
-		wizard.state.Message = "Nada fora da pasta KRANO foi removido. Revise a mensagem e tente novamente."
-		wizard.state.Error = err.Error()
-		wizard.started = false
-		wizard.mu.Unlock()
+	if !sourceReady || projectVersion(item.Path) != appVersion {
+		wizard.update(1, "Baixando a KRANO", "Preparando a versão oficial sem alterar seus dados locais.")
+		if err := installSource(item.Path, wizard.branch); err != nil {
+			wizard.fail(err)
+			return
+		}
 	}
+	nodePath, err := ensureNode(item.Path)
+	if err != nil {
+		wizard.fail(err)
+		return
+	}
+	if item.Profile != "" {
+		wizard.update(2, "Selecionando a conta", "Vinculando o perfil Cloudflare à pasta desta estrutura.")
+		if err := activateWranglerProfile(item.Path, nodePath, item.Profile); err != nil {
+			wizard.fail(errors.New("conecte o perfil Cloudflare antes de instalar: " + err.Error()))
+			return
+		}
+	}
+	wizard.update(3, "Criando sua infraestrutura", "Worker, banco D1 e biblioteca R2 estão sendo configurados.")
+	args := append([]string(nil), wizard.args...)
+	if !contains(args, "--yes") {
+		args = append(args, "--yes")
+	}
+	args = append(args, "--name="+item.Name)
+	if item.Profile != "" {
+		args = append(args, "--profile="+item.Profile)
+	}
+	result, _, err := runProjectInstaller(item.Path, nodePath, args)
+	if err != nil {
+		wizard.fail(err)
+		return
+	}
+	if !result.OK || result.URL == "" {
+		wizard.fail(errors.New("a instalação terminou sem devolver o endereço do painel"))
+		return
+	}
+	item = discoverInstallation(item.Path, item.Profile)
+	wizard.mu.Lock()
+	wizard.registry.upsertInstallation(item)
+	_ = saveDesktopRegistry(wizard.registry)
+	wizard.state.Installations = append([]desktopInstallation(nil), wizard.registry.Installations...)
+	wizard.state.Status = "complete"
+	wizard.state.Step = 4
+	wizard.state.Title = "Estrutura pronta"
+	wizard.state.Message = "O painel foi publicado. O app continuará aberto para você gerenciar tudo."
+	wizard.state.Error = ""
+	wizard.started = false
+	wizard.mu.Unlock()
+	_ = openURL(result.URL)
+}
 
+func (wizard *wizardServer) runProjectOperation(item desktopInstallation, operation string) {
+	nodePath, err := ensureNode(item.Path)
+	if err != nil {
+		wizard.fail(err)
+		return
+	}
+	if item.Profile != "" {
+		if err := activateWranglerProfile(item.Path, nodePath, item.Profile); err != nil {
+			wizard.fail(err)
+			return
+		}
+	}
+	args := []string{operation, "--yes"}
+	if item.Profile != "" {
+		args = append(args, "--profile="+item.Profile)
+	}
+	result, _, err := runProjectInstaller(item.Path, nodePath, args)
+	if err != nil {
+		wizard.fail(err)
+		return
+	}
+	wizard.complete("Recuperação pronta", "Defina a nova senha na página aberta. O link expira em 30 minutos.")
+	_ = openURL(result.URL)
+}
+
+func (wizard *wizardServer) connectProfile(profile string) {
 	sourceReady, err := isKranoSource(wizard.target)
 	if err != nil {
-		fail(err)
+		wizard.fail(err)
 		return
 	}
 	if !sourceReady || projectVersion(wizard.target) != appVersion {
 		if err := installSource(wizard.target, wizard.branch); err != nil {
-			fail(err)
+			wizard.fail(err)
 			return
 		}
 	}
-
-	update(2, "Verificando o computador", "Preparando automaticamente o ambiente necessário.")
 	nodePath, err := ensureNode(wizard.target)
 	if err != nil {
-		fail(err)
+		wizard.fail(err)
 		return
 	}
+	wrangler := filepath.Join(wizard.target, "node_modules", "wrangler", "bin", "wrangler.js")
+	if _, err := os.Stat(wrangler); err != nil {
+		if installErr := installNodeDependencies(wizard.target, nodePath); installErr != nil {
+			wizard.fail(errors.New("não foi possível preparar a autenticação Cloudflare"))
+			return
+		}
+	}
+	command := exec.Command(nodePath, wrangler, "auth", "create", profile)
+	command.Dir = wizard.target
+	command.Stdout, command.Stderr, command.Stdin = os.Stdout, os.Stderr, os.Stdin
+	if err := command.Run(); err != nil {
+		wizard.fail(errors.New("a autorização Cloudflare não foi concluída"))
+		return
+	}
+	wizard.complete("Conta conectada", "O perfil “"+profile+"” está pronto. Agora crie uma estrutura usando esse perfil.")
+}
 
-	update(3, "Conecte sua Cloudflare", "Uma página oficial pode abrir. Entre na conta e autorize a infraestrutura da KRANO.")
-	installerArgs := append([]string(nil), wizard.args...)
-	if wizard.operation == "recover" && !contains(installerArgs, "recover") {
-		installerArgs = append([]string{"recover"}, installerArgs...)
-	}
-	if !contains(installerArgs, "--yes") {
-		installerArgs = append(installerArgs, "--yes")
-	}
-	result, _, err := runProjectInstaller(wizard.target, nodePath, installerArgs)
+func (wizard *wizardServer) remove(item desktopInstallation, input operationRequest) {
+	nodePath, err := ensureNode(item.Path)
 	if err != nil {
-		fail(err)
+		wizard.fail(err)
 		return
 	}
-	if !result.OK || result.URL == "" {
-		fail(errors.New("a instalação terminou sem devolver o endereço do painel"))
+	if item.Profile != "" {
+		if err := activateWranglerProfile(item.Path, nodePath, item.Profile); err != nil {
+			wizard.fail(err)
+			return
+		}
+	}
+	script := filepath.Join(item.Path, "scripts", "uninstall.mjs")
+	command := exec.Command(nodePath, script)
+	command.Dir = item.Path
+	d1Answer, r2Answer := "n", "n"
+	if input.PreserveD1 {
+		d1Answer = "s"
+	}
+	if input.PreserveR2 {
+		r2Answer = "s"
+	}
+	command.Stdin = strings.NewReader(d1Answer + "\n" + r2Answer + "\nREMOVER " + item.Name + "\n")
+	var output bytes.Buffer
+	command.Stdout, command.Stderr = &output, &output
+	if err := command.Run(); err != nil {
+		wizard.fail(fmt.Errorf("a remoção Cloudflare falhou: %s", strings.TrimSpace(output.String())))
 		return
 	}
-
-	title := "Instalação concluída"
-	message := "O painel será aberto. Termine seu cadastro e conecte o Facebook em Meta Ads."
-	if result.Action == "recovery" {
-		title = "Recuperação pronta"
-		message = "Defina sua nova senha na página aberta. O link expira em 30 minutos."
+	if input.RemoveLocal {
+		if err := safeRemoveInstallationFolder(item.Path); err != nil {
+			wizard.fail(err)
+			return
+		}
 	}
-	update(4, title, message)
 	wizard.mu.Lock()
+	wizard.registry.removeInstallation(item.ID)
+	_ = saveDesktopRegistry(wizard.registry)
+	wizard.state.Installations = append([]desktopInstallation(nil), wizard.registry.Installations...)
 	wizard.state.Status = "complete"
-	wizard.state.Installed = true
-	wizard.state.PanelURL = result.URL
+	wizard.state.Step = 4
+	wizard.state.Title = "Estrutura removida"
+	wizard.state.Message = "Os recursos selecionados foram removidos. Dados marcados para preservação continuam na Cloudflare."
 	wizard.state.Error = ""
+	wizard.started = false
 	wizard.mu.Unlock()
-	if err := openURL(result.URL); err != nil {
-		wizard.mu.Lock()
-		wizard.state.Message = "Use o botão Abrir painel para continuar no navegador."
-		wizard.mu.Unlock()
+}
+
+func (wizard *wizardServer) update(step int, title, message string) {
+	wizard.mu.Lock()
+	wizard.state.Step, wizard.state.Title, wizard.state.Message = step, title, message
+	wizard.mu.Unlock()
+}
+
+func (wizard *wizardServer) complete(title, message string) {
+	wizard.mu.Lock()
+	wizard.state.Status, wizard.state.Step = "complete", 4
+	wizard.state.Title, wizard.state.Message, wizard.state.Error = title, message, ""
+	wizard.started = false
+	wizard.mu.Unlock()
+}
+
+func (wizard *wizardServer) fail(err error) {
+	wizard.mu.Lock()
+	wizard.state.Status = "error"
+	wizard.state.Title = "A operação precisa de atenção"
+	wizard.state.Message = "Nada fora da estrutura selecionada foi alterado."
+	wizard.state.Error = err.Error()
+	wizard.started = false
+	wizard.mu.Unlock()
+}
+
+func (wizard *wizardServer) newTarget(name string) string {
+	if _, err := os.Stat(filepath.Join(wizard.target, ".funnel-zero", "installation.json")); errors.Is(err, os.ErrNotExist) {
+		return wizard.target
 	}
-	go func() {
-		time.Sleep(20 * time.Second)
-		wizard.shutdown()
-	}()
+	return filepath.Join(filepath.Dir(wizard.target), "KRANO Estruturas", name)
+}
+
+func activateWranglerProfile(project, nodePath, profile string) error {
+	if profile == "" {
+		return nil
+	}
+	wrangler := filepath.Join(project, "node_modules", "wrangler", "bin", "wrangler.js")
+	if _, err := os.Stat(wrangler); err != nil {
+		return errors.New("Wrangler ainda não está preparado")
+	}
+	command := exec.Command(nodePath, wrangler, "auth", "activate", profile, project)
+	command.Dir = project
+	output, err := command.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%s", strings.TrimSpace(string(output)))
+	}
+	return nil
+}
+
+func installNodeDependencies(project, nodePath string) error {
+	npm := "npm"
+	if runtime.GOOS == "windows" {
+		npm = filepath.Join(filepath.Dir(nodePath), "npm.cmd")
+		if _, err := os.Stat(npm); err != nil {
+			found, lookupErr := exec.LookPath("npm.cmd")
+			if lookupErr != nil {
+				return errors.New("npm não encontrado no ambiente Node.js")
+			}
+			npm = found
+		}
+	}
+	command := exec.Command(npm, "ci", "--no-audit", "--no-fund")
+	command.Dir = project
+	command.Stdout, command.Stderr = os.Stdout, os.Stderr
+	nodeDir := filepath.Dir(nodePath)
+	command.Env = append(os.Environ(), "PATH="+nodeDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return command.Run()
+}
+
+func safeRemoveInstallationFolder(target string) error {
+	clean, err := filepath.Abs(target)
+	if err != nil {
+		return err
+	}
+	volume := filepath.VolumeName(clean)
+	root := volume + string(filepath.Separator)
+	if clean == root || filepath.Dir(clean) == root {
+		return errors.New("a pasta local é ampla demais para remoção automática")
+	}
+	if _, err := readInstallationManifest(clean); err != nil {
+		return errors.New("a pasta local não contém um manifesto KRANO válido")
+	}
+	return os.RemoveAll(clean)
+}
+
+func normalizeStructureName(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	value = regexp.MustCompile(`[^a-z0-9-]+`).ReplaceAllString(value, "-")
+	value = strings.Trim(value, "-")
+	if value == "" {
+		return ""
+	}
+	if !strings.HasPrefix(value, "krano") {
+		value = "krano-" + value
+	}
+	if len(value) > 48 {
+		value = strings.TrimRight(value[:48], "-")
+	}
+	return value
+}
+
+func normalizeProfileName(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	value = regexp.MustCompile(`[^a-z0-9_-]+`).ReplaceAllString(value, "-")
+	return strings.Trim(value, "-_")
 }
 
 func installedPanelURL(target string) string {
-	raw, err := os.ReadFile(filepath.Join(target, ".funnel-zero", "installation.json"))
+	manifest, err := readInstallationManifest(target)
 	if err != nil {
 		return ""
 	}
-	var installation savedInstallation
-	if json.Unmarshal(raw, &installation) != nil || !safeWebURL(installation.Worker.URL) {
-		return ""
-	}
-	return strings.TrimRight(installation.Worker.URL, "/") + "/login"
+	return strings.TrimRight(manifest.Worker.URL, "/") + "/login"
 }
 
 func safeWebURL(value string) bool {
@@ -297,40 +608,54 @@ func writeWizardJSON(response http.ResponseWriter, value any) {
 	_ = json.NewEncoder(response).Encode(value)
 }
 
-var wizardTemplate = template.Must(template.New("wizard").Parse(`<!doctype html>
-<html lang="pt-BR">
-<head>
+var wizardTemplate = template.Must(template.New("desktop").Parse(`<!doctype html>
+<html lang="pt-BR" data-theme="dark"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Instalar KRANO</title>
+<title>KRANO Desktop</title>
 <style>
-:root{color-scheme:light dark;font:15px Inter,ui-sans-serif,system-ui,sans-serif;background:#0d0e10;color:#f5f5f5}
-*{box-sizing:border-box}body{margin:0;min-height:100vh;background:#0d0e10}.shell{min-height:100vh;display:grid;grid-template-columns:340px 1fr}
-aside{padding:38px;background:#151619;border-right:1px solid #2a2c31;display:flex;flex-direction:column}.brand{font-size:20px;font-weight:850;letter-spacing:2px}
-.brand span{display:inline-grid;place-items:center;width:32px;height:32px;margin-right:10px;border-radius:9px;background:#f4f4f4;color:#111}
-.steps{display:grid;gap:17px;margin:auto 0}.step{display:grid;grid-template-columns:30px 1fr;gap:11px;color:#777b83}.step i{display:grid;place-items:center;width:28px;height:28px;border:1px solid #34373d;border-radius:50%;font-style:normal;font-size:11px}.step strong,.step small{display:block}.step small{margin-top:3px;font-size:11px}.step.active{color:#fff}.step.active i{background:#fff;color:#111;border-color:#fff}
-aside footer{color:#777b83;font-size:11px;line-height:1.6}main{display:grid;place-items:center;padding:40px}.card{width:min(720px,100%);padding:38px;border:1px solid #2b2e34;border-radius:18px;background:#121316}
-.eyebrow{color:#969aa3;font-size:11px;font-weight:750;letter-spacing:1.4px}h1{font-size:36px;letter-spacing:-1.5px;margin:12px 0}p{color:#9b9fa8;line-height:1.65}.connections{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:25px 0}
-.connection{padding:16px;border:1px solid #2b2e34;border-radius:12px;background:#181a1e}.connection strong,.connection small{display:block}.connection small{color:#858992;margin-top:5px}
-.progress{height:6px;margin:24px 0;background:#24262b;border-radius:20px;overflow:hidden}.progress i{display:block;height:100%;width:0;background:#fff;transition:width .3s}
-.actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:26px}button{border:1px solid #34373d;border-radius:10px;padding:12px 17px;background:#202226;color:#fff;font-weight:750;cursor:pointer}
-button.primary{background:#f4f4f4;color:#111;border-color:#f4f4f4}button:disabled{opacity:.5;cursor:not-allowed}.error{padding:13px;border:1px solid #55464a;border-radius:10px;color:#d9c6c9;background:#21191b}
-code{display:block;margin-top:18px;padding:10px;border-radius:8px;color:#92969e;background:#0d0e10;font-size:11px;overflow-wrap:anywhere}
-@media(max-width:760px){.shell{grid-template-columns:1fr}aside{display:none}main{padding:18px}.card{padding:25px}.connections{grid-template-columns:1fr}h1{font-size:29px}}
-</style>
-</head>
-<body><div class="shell"><aside><div class="brand"><span>K</span>KRANO</div><div class="steps">
-<div class="step active" data-step="1"><i>1</i><div><strong>Preparar</strong><small>Verificação automática</small></div></div>
-<div class="step" data-step="2"><i>2</i><div><strong>Cloudflare</strong><small>Hospedagem e dados</small></div></div>
-<div class="step" data-step="3"><i>3</i><div><strong>Publicar</strong><small>Criação do painel</small></div></div>
-<div class="step" data-step="4"><i>4</i><div><strong>Facebook</strong><small>Conexão dentro do painel</small></div></div>
-</div><footer>Projeto aberto e instalado na sua própria conta Cloudflare.<br>Seus dados continuam sob seu controle.</footer></aside>
-<main><section class="card"><span class="eyebrow">ASSISTENTE DE INSTALAÇÃO</span><h1 id="title">Carregando…</h1><p id="message"></p>
-<div class="connections"><div class="connection"><strong>Cloudflare</strong><small>Hospedagem, banco, vídeos e domínios</small></div><div class="connection"><strong>Meta</strong><small>Anúncios, campanhas, pixels e resultados</small></div></div>
-<div class="progress"><i id="progress"></i></div><div id="error"></div><code id="path"></code>
-<div class="actions"><button class="primary" id="start">Instalar KRANO</button><button id="open" hidden>Abrir painel</button><button id="recover" hidden>Recuperar acesso</button></div>
-</section></main></div>
+:root{color-scheme:dark;--bg:#0b0c0e;--panel:#121418;--soft:#181b20;--line:#2a2e35;--text:#f4f5f7;--muted:#969ca7;--accent:#e9edf3;--on:#101216;--good:#36c78b;--warn:#f1b64c;--bad:#ef6a6a}
+[data-theme=light]{color-scheme:light;--bg:#f3f4f6;--panel:#fff;--soft:#f7f8fa;--line:#dfe2e7;--text:#17191d;--muted:#68707d;--accent:#1d2229;--on:#fff}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px Inter,ui-sans-serif,system-ui,sans-serif}.app{min-height:100vh;display:grid;grid-template-columns:240px 1fr}
+aside{position:sticky;top:0;height:100vh;padding:24px 18px;border-right:1px solid var(--line);background:var(--panel);display:flex;flex-direction:column}.brand{font-size:18px;font-weight:900;letter-spacing:2px}.brand b{display:inline-grid;place-items:center;width:31px;height:31px;margin-right:9px;border-radius:9px;background:var(--accent);color:var(--on)}
+nav{display:grid;gap:6px;margin:36px 0}nav button{justify-content:flex-start;width:100%;background:transparent;border-color:transparent;color:var(--muted)}nav button.active{background:var(--soft);color:var(--text);border-color:var(--line)}.aside-foot{margin-top:auto;color:var(--muted);font-size:12px}
+main{padding:34px;max-width:1250px;width:100%;margin:auto}.top{display:flex;justify-content:space-between;gap:20px;align-items:flex-start;margin-bottom:26px}h1{font-size:31px;letter-spacing:-1px;margin:0 0 7px}h2{font-size:19px;margin:0 0 5px}h3{margin:0 0 6px}.muted,p{color:var(--muted);line-height:1.55;margin:0}.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+button{border:1px solid var(--line);border-radius:10px;padding:10px 13px;background:var(--soft);color:var(--text);font-weight:720;cursor:pointer}button.primary{background:var(--accent);color:var(--on);border-color:var(--accent)}button.danger{color:var(--bad)}button:disabled{opacity:.5;cursor:wait}
+.grid{display:grid;grid-template-columns:repeat(12,1fr);gap:14px}.card{grid-column:span 12;padding:20px;border:1px solid var(--line);border-radius:15px;background:var(--panel)}.half{grid-column:span 6}.third{grid-column:span 4}
+.hero{display:grid;grid-template-columns:1.4fr .8fr;gap:20px;align-items:center}.hero h2{font-size:24px}.pill{display:inline-flex;align-items:center;gap:7px;padding:6px 9px;border:1px solid var(--line);border-radius:99px;color:var(--muted);font-size:11px}.dot{width:7px;height:7px;border-radius:50%;background:var(--good)}
+.structures{display:grid;gap:10px;margin-top:16px}.structure{display:grid;grid-template-columns:1fr auto;gap:16px;align-items:center;padding:15px;border:1px solid var(--line);border-radius:12px;background:var(--soft)}.meta{display:flex;gap:12px;flex-wrap:wrap;color:var(--muted);font-size:11px;margin-top:8px}
+.usage{display:grid;gap:12px}.meter-head{display:flex;justify-content:space-between}.meter{height:7px;background:var(--soft);border-radius:9px;overflow:hidden}.meter i{display:block;height:100%;background:var(--accent);width:0}.note{padding:11px;border-left:3px solid var(--warn);background:var(--soft);color:var(--muted);border-radius:5px}
+.view{display:none}.view.active{display:block}.steps{display:grid;gap:11px;margin-top:16px}.step{display:grid;grid-template-columns:27px 1fr;gap:10px}.step b{display:grid;place-items:center;width:26px;height:26px;border-radius:50%;background:var(--soft);border:1px solid var(--line)}
+.status{display:none;margin-bottom:16px;padding:14px;border:1px solid var(--line);border-radius:12px;background:var(--panel)}.status.show{display:block}.status.error{border-color:var(--bad)}.progress{height:4px;background:var(--soft);margin-top:10px}.progress i{display:block;height:100%;background:var(--accent);transition:width .3s}
+dialog{width:min(520px,calc(100% - 30px));border:1px solid var(--line);border-radius:16px;padding:0;background:var(--panel);color:var(--text)}dialog::backdrop{background:#0009}.modal{padding:22px}.modal footer{display:flex;justify-content:flex-end;gap:9px;margin-top:20px}
+label{display:block;margin:14px 0 6px;font-size:12px;font-weight:700}input,select{width:100%;padding:11px;border:1px solid var(--line);border-radius:9px;background:var(--soft);color:var(--text)}.check{display:flex;gap:9px;align-items:center}.check input{width:auto}
+@media(max-width:850px){.app{grid-template-columns:1fr}aside{position:static;height:auto;border-right:0;border-bottom:1px solid var(--line)}nav{display:flex;margin:18px 0 0;overflow:auto}.aside-foot{display:none}main{padding:20px}.half,.third{grid-column:span 12}.hero{grid-template-columns:1fr}.structure{grid-template-columns:1fr}}
+</style></head><body><div class="app">
+<aside><div class="brand"><b>K</b>KRANO</div><nav>
+<button class="active" data-view="home">Visão geral</button><button data-view="structures">Estruturas</button><button data-view="accounts">Contas Cloudflare</button><button data-view="guides">Tutoriais</button>
+</nav><div class="aside-foot">KRANO Desktop {{.Version}}<br>Seus dados ficam na sua Cloudflare.<br><button id="exit" style="margin-top:12px">Encerrar app</button></div></aside>
+<main><div id="status" class="status"><div class="row" style="justify-content:space-between"><strong id="status-title"></strong><span id="status-step"></span></div><p id="status-message"></p><div id="status-error"></div><div class="progress"><i id="status-progress"></i></div></div>
+<section class="view active" id="home"><div class="top"><div><h1>Olá, vamos construir.</h1><p>Uma central local para criar, manter e remover toda a sua estrutura KRANO.</p></div><button id="theme">Tema claro</button></div>
+<div class="grid"><article class="card hero"><div><span class="pill"><i class="dot"></i>APP LOCAL E PERMANENTE</span><h2 style="margin-top:14px">Teste ofertas sem custo inicial de ferramenta.</h2><p>Site, funil, vídeo, tracking e dashboard ficam na sua própria conta Cloudflare. Você mantém o controle e acompanha os limites gratuitos.</p></div><div class="row"><button class="primary" data-new>Nova estrutura</button><button data-guide>Ver tutorial</button></div></article>
+<article class="card half"><h2>Suas estruturas</h2><p id="summary">Carregando...</p><div id="home-structures" class="structures"></div></article>
+<article class="card half"><h2>Faixa gratuita Cloudflare</h2><div class="usage" style="margin-top:15px"><div><div class="meter-head"><span>Workers</span><b>100 mil requisições/dia</b></div><div class="meter"><i></i></div></div><div><div class="meter-head"><span>R2 Standard</span><b>10 GB-mês</b></div><div class="meter"><i></i></div></div><div><div class="meter-head"><span>D1</span><b>5 GB total</b></div><div class="meter"><i></i></div></div><p class="note">O app mostra os limites do plano; o consumo real fica no painel Cloudflare até a API de métricas ser autorizada.</p></div></article></div></section>
+<section class="view" id="structures"><div class="top"><div><h1>Estruturas</h1><p>Instale, atualize, abra, recupere ou remova cada ambiente.</p></div><button class="primary" data-new>Nova estrutura</button></div><div class="card"><div id="all-structures" class="structures"></div></div></section>
+<section class="view" id="accounts"><div class="top"><div><h1>Contas Cloudflare</h1><p>Perfis OAuth separados evitam publicar uma estrutura na conta errada.</p></div><button class="primary" id="connect">Conectar conta</button></div><div class="grid"><article class="card half"><h2>Como funciona</h2><div class="steps"><div class="step"><b>1</b><div><strong>Dê um apelido</strong><p>Ex.: pessoal, cliente-a ou testes.</p></div></div><div class="step"><b>2</b><div><strong>Autorize no navegador</strong><p>A tela é oficial da Cloudflare; a KRANO não guarda sua senha.</p></div></div><div class="step"><b>3</b><div><strong>Escolha ao instalar</strong><p>Cada pasta fica vinculada ao perfil correto.</p></div></div></div></article><article class="card half"><h2>Perfis em uso</h2><div id="profiles" class="structures"></div></article></div></section>
+<section class="view" id="guides"><div class="top"><div><h1>Tutoriais opcionais</h1><p>Ative ou esconda as explicações quando quiser.</p></div><label class="check"><input id="tutorial-toggle" type="checkbox"> Mostrar tutoriais</label></div><div class="grid"><article class="card third"><h2>Primeira estrutura</h2><p>Conecte a Cloudflare, crie um nome e aguarde o app publicar Worker, D1 e R2.</p></article><article class="card third"><h2>Hospedagem de vídeo</h2><p>Os arquivos vão para o R2 Standard. O player otimizado é administrado no painel KRANO.</p></article><article class="card third"><h2>Meta Ads</h2><p>Depois do primeiro acesso, conecte a Meta dentro do painel para campanhas, pixels e tracking.</p></article><article class="card"><h2>Custos e cartão</h2><p>A KRANO trabalha em modo FREE_ONLY. O R2 tem franquia gratuita, mas a Cloudflare pode solicitar uma forma de pagamento ao ativar o produto. O app não recebe nem armazena dados de cartão.</p></article></div></section>
+</main></div>
+<dialog id="new-dialog"><form class="modal" method="dialog"><h2>Nova estrutura</h2><p>Use um nome curto e selecione o perfil Cloudflare já conectado.</p><label>Nome da estrutura</label><input id="new-name" placeholder="minha-oferta"><label>Perfil Cloudflare</label><input id="new-profile" placeholder="pessoal"><footer><button value="cancel">Cancelar</button><button class="primary" id="install-new" value="default">Instalar estrutura</button></footer></form></dialog>
+<dialog id="connect-dialog"><form class="modal" method="dialog"><h2>Conectar Cloudflare</h2><p>Será aberta a autorização oficial. Você pode manter vários logins organizados.</p><label>Apelido do perfil</label><input id="profile-name" placeholder="pessoal"><footer><button value="cancel">Cancelar</button><button class="primary" id="connect-go" value="default">Abrir autorização</button></footer></form></dialog>
+<dialog id="remove-dialog"><form class="modal" method="dialog"><h2>Remover estrutura</h2><p>Esta ação apaga recursos na Cloudflare. Faça backup antes se precisar dos dados.</p><label class="check"><input id="preserve-d1" type="checkbox" checked> Preservar banco D1</label><label class="check"><input id="preserve-r2" type="checkbox" checked> Preservar vídeos no R2</label><label class="check"><input id="remove-local" type="checkbox"> Apagar também a pasta local</label><label id="confirm-label">Confirmação</label><input id="remove-confirm"><footer><button value="cancel">Cancelar</button><button class="danger" id="remove-go" value="default">Remover</button></footer></form></dialog>
 <script>
-const token={{printf "%q" .Token}},headers={"X-Krano-Token":token},title=document.querySelector("#title"),message=document.querySelector("#message"),progress=document.querySelector("#progress"),error=document.querySelector("#error"),start=document.querySelector("#start"),open=document.querySelector("#open"),recover=document.querySelector("#recover"),path=document.querySelector("#path");
-async function state(){const r=await fetch("/api/state?token="+encodeURIComponent(token),{headers});const s=await r.json();title.textContent=s.title;message.textContent=s.message;path.textContent="Pasta local: "+s.projectPath;progress.style.width=(s.step*25)+"%";error.innerHTML=s.error?'<p class="error"></p>':"";if(s.error)error.firstChild.textContent=s.error;const busy=s.status==="running";start.hidden=busy||s.status==="complete";start.disabled=busy;start.textContent=s.installed?"Atualizar instalação":"Instalar KRANO";open.hidden=!s.panelUrl||busy;recover.hidden=!s.installed||busy;document.querySelectorAll(".step").forEach((el)=>el.classList.toggle("active",Number(el.dataset.step)<=Math.max(1,s.step)));if(busy)setTimeout(state,1200)}
-start.onclick=async()=>{start.disabled=true;await fetch("/api/start",{method:"POST",headers});state()};open.onclick=async()=>{open.disabled=true;await fetch("/api/open",{method:"POST",headers})};recover.onclick=async()=>{recover.disabled=true;await fetch("/api/recover",{method:"POST",headers});state()};state();
+const token=new URLSearchParams(location.search).get("token")||"",headers={"X-Krano-Token":token,"Content-Type":"application/json"};let current=null,removeId="";
+const $=s=>document.querySelector(s),esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+async function api(path,body={}){const r=await fetch(path,{method:"POST",headers,body:JSON.stringify(body)});if(!r.ok)throw new Error(await r.text());return r.json()}
+function card(i){const installed=i.status==="installed";return '<div class="structure"><div><h3>'+esc(i.name)+'</h3><p>'+esc(installed?i.workerUrl:"Ainda não instalada")+'</p><div class="meta"><span>'+esc(i.profile||"perfil padrão")+'</span><span>'+esc(i.version||"nova")+'</span><span>'+esc(i.path)+'</span></div></div><div class="row">'+(installed?'<button data-open="'+esc(i.id)+'">Abrir</button><button data-update="'+esc(i.id)+'">Atualizar</button><button data-recover="'+esc(i.id)+'">Recuperar</button><button class="danger" data-remove="'+esc(i.id)+'">Remover</button>':'<button class="primary" data-update="'+esc(i.id)+'">Instalar</button>')+'</div></div>'}
+function bind(){document.querySelectorAll("[data-open]").forEach(b=>b.onclick=()=>api("/api/open",{id:b.dataset.open}));document.querySelectorAll("[data-update]").forEach(b=>b.onclick=()=>api("/api/install",{id:b.dataset.update}).then(poll).catch(showError));document.querySelectorAll("[data-recover]").forEach(b=>b.onclick=()=>api("/api/recover",{id:b.dataset.recover}).then(poll).catch(showError));document.querySelectorAll("[data-remove]").forEach(b=>b.onclick=()=>{removeId=b.dataset.remove;const i=current.installations.find(x=>x.id===removeId);$("#confirm-label").textContent="Digite REMOVER "+i.name;$("#remove-confirm").value="";$("#remove-dialog").showModal()})}
+function render(s){current=s;const html=s.installations.length?s.installations.map(card).join(""):'<p>Nenhuma estrutura ainda. Crie a primeira em poucos cliques.</p>';$("#home-structures").innerHTML=html;$("#all-structures").innerHTML=html;$("#summary").textContent=s.installations.filter(i=>i.status==="installed").length+" estrutura(s) instalada(s)";$("#tutorial-toggle").checked=s.tutorialEnabled;const profiles=[...new Set(s.installations.map(i=>i.profile).filter(Boolean))];$("#profiles").innerHTML=profiles.length?profiles.map(p=>'<div class="structure"><div><strong>'+esc(p)+'</strong><p>Perfil OAuth local</p></div><span class="pill"><i class="dot"></i>EM USO</span></div>').join(""):'<p>Nenhum perfil usado ainda.</p>';const box=$("#status");box.classList.toggle("show",s.status==="running"||s.status==="error"||s.status==="complete");box.classList.toggle("error",s.status==="error");$("#status-title").textContent=s.title;$("#status-message").textContent=s.message;$("#status-step").textContent=s.status==="running"?"Etapa "+s.step+" de 4":"";$("#status-error").textContent=s.error||"";$("#status-progress").style.width=(s.step*25)+"%";bind()}
+async function state(){const r=await fetch("/api/state?token="+encodeURIComponent(token),{headers});render(await r.json())}
+function poll(){state().then(()=>{if(current.status==="running")setTimeout(poll,1200)})}function showError(e){alert(e.message)}
+document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{document.querySelectorAll("nav button,.view").forEach(x=>x.classList.remove("active"));b.classList.add("active");$("#"+b.dataset.view).classList.add("active")});document.querySelectorAll("[data-new]").forEach(b=>b.onclick=()=>$("#new-dialog").showModal());document.querySelectorAll("[data-guide]").forEach(b=>b.onclick=()=>document.querySelector('[data-view="guides"]').click());
+$("#connect").onclick=()=>$("#connect-dialog").showModal();$("#install-new").onclick=e=>{e.preventDefault();api("/api/install",{name:$("#new-name").value,profile:$("#new-profile").value}).then(()=>{$("#new-dialog").close();poll()}).catch(showError)};$("#connect-go").onclick=e=>{e.preventDefault();api("/api/connect",{profile:$("#profile-name").value}).then(()=>{$("#connect-dialog").close();poll()}).catch(showError)};$("#remove-go").onclick=e=>{e.preventDefault();api("/api/remove",{id:removeId,confirmation:$("#remove-confirm").value,preserveD1:$("#preserve-d1").checked,preserveR2:$("#preserve-r2").checked,removeLocal:$("#remove-local").checked}).then(()=>{$("#remove-dialog").close();poll()}).catch(showError)};$("#tutorial-toggle").onchange=e=>api("/api/tutorial",{enabled:e.target.checked}).catch(showError);
+$("#theme").onclick=()=>{const light=document.documentElement.dataset.theme!=="light";document.documentElement.dataset.theme=light?"light":"dark";$("#theme").textContent=light?"Tema escuro":"Tema claro"};state();
+$("#exit").onclick=()=>api("/api/exit").then(()=>{document.body.innerHTML='<main style="padding:40px"><h1>KRANO encerrada</h1><p>Você pode fechar esta aba.</p></main>'}).catch(showError);
 </script></body></html>`))

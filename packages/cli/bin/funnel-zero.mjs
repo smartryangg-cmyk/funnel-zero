@@ -17,7 +17,7 @@ const configPath = join(projectRoot, "wrangler.jsonc");
 const wranglerBin = join(projectRoot, "node_modules", "wrangler", "bin", "wrangler.js");
 const isWindows = process.platform === "win32";
 const npmCommand = isWindows ? "npm.cmd" : "npm";
-const APP_VERSION = "0.3.2";
+const APP_VERSION = "0.4.0";
 const RESULT_PREFIX = "KRANO_RESULT_JSON:";
 const REQUIRED_WRANGLER_SCOPES = [
   "account:read",
@@ -32,6 +32,12 @@ const REQUIRED_WRANGLER_SCOPES = [
 const args = new Set(process.argv.slice(2));
 const nonInteractive = args.has("--yes") || process.env.CI === "true";
 const command = process.argv.slice(2).find((arg) => !arg.startsWith("--")) ?? "setup";
+const optionValue = (name) => {
+  const prefix = `--${name}=`;
+  return process.argv.slice(2).find((arg) => arg.startsWith(prefix))?.slice(prefix.length) ?? "";
+};
+const requestedName = optionValue("name");
+const profileName = optionValue("profile");
 
 const colors = {
   reset: "\x1b[0m",
@@ -69,7 +75,7 @@ function emitResult(result) {
 function runWrangler(wranglerArgs, options = {}) {
   const result = spawnSync(
     process.execPath,
-    [wranglerBin, ...wranglerArgs],
+    [wranglerBin, ...(profileName ? ["--profile", profileName] : []), ...wranglerArgs],
     {
       cwd: projectRoot,
       encoding: "utf8",
@@ -501,7 +507,7 @@ async function setup() {
   ok("Cloudflare autenticada");
 
   const installationName = verifyPrefix(
-    await prompt("Nome da instalação", previous?.installationName ?? "krano-development"),
+    await prompt("Nome da instalação", requestedName || previous?.installationName || "krano-development"),
     "krano-development"
   );
   const workerName = installationName;
