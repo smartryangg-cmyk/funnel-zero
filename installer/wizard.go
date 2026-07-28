@@ -33,6 +33,7 @@ type wizardState struct {
 	ActiveID         string                `json:"activeId,omitempty"`
 	ProjectPath      string                `json:"projectPath,omitempty"`
 	TutorialEnabled  bool                  `json:"tutorialEnabled"`
+	OnboardingSeen   bool                  `json:"onboardingSeen"`
 	Profiles         []desktopProfile      `json:"profiles"`
 	Installations    []desktopInstallation `json:"installations"`
 	Vault            []vaultMetadata       `json:"vault"`
@@ -82,6 +83,7 @@ func runWizard(target, branch string, args []string) error {
 		Title:           "Sua central KRANO",
 		Message:         "Instale e gerencie estruturas Cloudflare sem depender do terminal.",
 		TutorialEnabled: registry.TutorialEnabled,
+		OnboardingSeen:  registry.OnboardingSeen,
 		Profiles:        registry.Profiles,
 		Installations:   registry.Installations,
 	}
@@ -104,6 +106,7 @@ func runWizard(target, branch string, args []string) error {
 	mux.HandleFunc("/api/recover", wizard.recoverRequest)
 	mux.HandleFunc("/api/remove", wizard.removeRequest)
 	mux.HandleFunc("/api/tutorial", wizard.tutorialRequest)
+	mux.HandleFunc("/api/onboarding", wizard.onboardingRequest)
 	mux.HandleFunc("/api/vault/save", wizard.vaultSaveRequest)
 	mux.HandleFunc("/api/vault/read", wizard.vaultReadRequest)
 	mux.HandleFunc("/api/vault/delete", wizard.vaultDeleteRequest)
@@ -152,6 +155,7 @@ func (wizard *wizardServer) readState(response http.ResponseWriter, request *htt
 	wizard.registry.refresh()
 	wizard.state.Profiles = append([]desktopProfile(nil), wizard.registry.Profiles...)
 	wizard.state.Installations = append([]desktopInstallation(nil), wizard.registry.Installations...)
+	wizard.state.OnboardingSeen = wizard.registry.OnboardingSeen
 	if vault, err := loadVaultStore(); err == nil {
 		wizard.state.Vault = vaultMetadataList(vault)
 	}
@@ -332,6 +336,25 @@ func (wizard *wizardServer) tutorialRequest(response http.ResponseWriter, reques
 	wizard.mu.Unlock()
 	if err != nil {
 		http.Error(response, "Não foi possível salvar a preferência.", http.StatusInternalServerError)
+		return
+	}
+	writeWizardJSON(response, map[string]bool{"ok": true})
+}
+
+func (wizard *wizardServer) onboardingRequest(response http.ResponseWriter, request *http.Request) {
+	input, ok := wizard.decode(response, request)
+	if !ok || input.Enabled == nil {
+		return
+	}
+	wizard.mu.Lock()
+	wizard.registry.TutorialEnabled = *input.Enabled
+	wizard.registry.OnboardingSeen = true
+	wizard.state.TutorialEnabled = *input.Enabled
+	wizard.state.OnboardingSeen = true
+	err := saveDesktopRegistry(wizard.registry)
+	wizard.mu.Unlock()
+	if err != nil {
+		http.Error(response, "Não foi possível concluir as boas-vindas.", http.StatusInternalServerError)
 		return
 	}
 	writeWizardJSON(response, map[string]bool{"ok": true})
@@ -631,6 +654,9 @@ func (wizard *wizardServer) remove(item desktopInstallation, input operationRequ
 	script := filepath.Join(item.Path, "scripts", "uninstall.mjs")
 	command := exec.Command(nodePath, script)
 	command.Dir = item.Path
+	if item.AccountID != "" {
+		command.Env = append(os.Environ(), "CLOUDFLARE_ACCOUNT_ID="+item.AccountID)
+	}
 	d1Answer, r2Answer := "n", "n"
 	if input.PreserveD1 {
 		d1Answer = "s"
@@ -871,6 +897,7 @@ label{display:block;margin:14px 0 6px;font-size:12px;font-weight:700}input,selec
 <dialog id="connect-dialog"><form class="modal" method="dialog"><h2>Conectar Cloudflare</h2><div id="connect-fields"><p>Será aberta a autorização oficial. Você pode manter vários logins organizados.</p><label>Apelido do perfil</label><input id="profile-name" placeholder="pessoal"></div><div id="connect-progress" class="connect-progress" aria-live="polite" hidden><i class="spinner" aria-hidden="true"></i><strong id="connect-progress-title">Preparando conexão</strong><p id="connect-progress-message">Aguarde um instante.</p></div><footer><button id="connect-cancel" value="cancel">Cancelar</button><button class="primary" id="connect-go" value="default">Abrir autorização</button></footer></form></dialog>
 <dialog id="remove-dialog"><form class="modal" method="dialog"><h2>Remover estrutura</h2><p>Esta ação apaga recursos na Cloudflare. Faça backup antes se precisar dos dados.</p><label class="check"><input id="preserve-d1" type="checkbox" checked> Preservar banco D1</label><label class="check"><input id="preserve-r2" type="checkbox" checked> Preservar vídeos no R2</label><label class="check"><input id="remove-local" type="checkbox"> Apagar também a pasta local</label><label id="confirm-label">Confirmação</label><input id="remove-confirm"><footer><button value="cancel">Cancelar</button><button class="danger" id="remove-go" value="default">Remover</button></footer></form></dialog>
 <dialog id="vault-dialog"><form class="modal" method="dialog"><h2>Credencial do painel</h2><p>Preencha apenas se quiser usar o cofre local.</p><label>Login ou e-mail</label><input id="vault-login" autocomplete="username"><label>Senha</label><div class="row" style="flex-wrap:nowrap"><input id="vault-password" type="password" autocomplete="current-password"><button id="vault-reveal" type="button">Mostrar</button><button id="vault-copy" type="button">Copiar</button></div><label>Recuperação ou observação opcional</label><input id="vault-recovery"><footer><button id="vault-delete" class="danger" type="button" hidden>Apagar</button><button value="cancel">Cancelar</button><button class="primary" id="vault-save" value="default">Salvar no Windows</button></footer></form></dialog>
+<dialog id="onboarding-dialog"><form class="modal" method="dialog"><span class="pill"><i class="dot"></i>PRIMEIRO ACESSO</span><h2 style="margin-top:16px">Boas-vindas à KRANO</h2><p>Este app cria e gerencia sua estrutura na sua própria conta Cloudflare. Você poderá instalar, atualizar, abrir ou remover tudo por aqui.</p><div class="steps"><div class="step"><b>1</b><div><strong>Conecte sua Cloudflare</strong><p>A autorização acontece na página oficial; a KRANO não recebe sua senha.</p></div></div><div class="step"><b>2</b><div><strong>Crie uma estrutura</strong><p>O app prepara Worker, banco D1, biblioteca R2 e publica o painel.</p></div></div><div class="step"><b>3</b><div><strong>Continue pelo painel</strong><p>Depois, gerencie páginas, vídeos, tracking e integrações no navegador.</p></div></div></div><label class="check"><input id="onboarding-tutorial" type="checkbox" checked> Mostrar tutoriais e dicas para iniciantes</label><footer><button id="onboarding-start" class="primary" value="default">Começar</button></footer></form></dialog>
 <script>
 const token=new URLSearchParams(location.search).get("token")||"",headers={"X-Krano-Token":token,"Content-Type":"application/json"};let current=null,removeId="",vaultId="",authWindow=null,openedAuthorizationURL="";
 const $=s=>document.querySelector(s),esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -884,7 +911,7 @@ function card(i){const installed=i.status==="installed";return '<div class="stru
 function bind(){document.querySelectorAll("[data-open]").forEach(b=>b.onclick=()=>api("/api/open",{id:b.dataset.open}));document.querySelectorAll("[data-update]").forEach(b=>b.onclick=()=>api("/api/install",{id:b.dataset.update}).then(poll).catch(showError));document.querySelectorAll("[data-recover]").forEach(b=>b.onclick=()=>api("/api/recover",{id:b.dataset.recover}).then(poll).catch(showError));document.querySelectorAll("[data-remove]").forEach(b=>b.onclick=()=>{removeId=b.dataset.remove;const i=current.installations.find(x=>x.id===removeId);$("#confirm-label").textContent="Digite REMOVER "+i.name;$("#remove-confirm").value="";$("#remove-dialog").showModal()})}
 function vaultCard(i){const saved=(current.vault||[]).find(v=>v.installationId===i.id);return '<div class="structure"><div><h3>'+esc(i.name)+'</h3><p>'+(saved?'Credencial protegida · atualizada '+esc(new Date(saved.updatedAt).toLocaleString("pt-BR")):'Nenhuma credencial salva')+'</p></div><div class="row"><button data-vault="'+esc(i.id)+'">'+(saved?'Abrir cofre':'Adicionar login')+'</button></div></div>'}
 function syncConnectFlow(s){if(s.operation!=="connect")return;const dialog=$("#connect-dialog");if(s.status==="running"){if(!dialog.open)dialog.showModal();setConnectPending(true,s.title,s.message);openAuthorizationURL(s.authorizationUrl);return}if(s.status==="complete"){closeAuthorizationWindow();setConnectPending(false);$("#profile-name").value="";if(dialog.open)dialog.close();return}if(s.status==="error"){closeAuthorizationWindow();setConnectPending(false);if(!dialog.open)dialog.showModal()}}
-function render(s){current=s;const html=s.installations.length?s.installations.map(card).join(""):'<p>Nenhuma estrutura ainda. Crie a primeira em poucos cliques.</p>';$("#home-structures").innerHTML=html;$("#all-structures").innerHTML=html;$("#summary").textContent=s.installations.filter(i=>i.status==="installed").length+" estrutura(s) instalada(s)";$("#tutorial-toggle").checked=s.tutorialEnabled;document.querySelectorAll(".tutorial-card").forEach(x=>x.hidden=!s.tutorialEnabled);const profiles=s.profiles||[];$("#profiles").innerHTML=profiles.length?profiles.map(p=>'<div class="structure"><div><strong>'+esc(p.name)+'</strong><p>Conta autorizada no navegador</p></div><span class="pill"><i class="dot"></i>CONECTADA</span></div>').join(""):'<p>Nenhuma conta conectada. Clique em “Conectar conta”.</p>';$("#new-profile").innerHTML=profiles.length?profiles.map(p=>'<option value="'+esc(p.name)+'">'+esc(p.name)+'</option>').join(""):'<option value="">Conecte uma conta primeiro</option>';$("#install-new").disabled=!profiles.length;$("#vault-list").innerHTML=s.installations.length?s.installations.map(vaultCard).join(""):'<p>Crie uma estrutura antes de adicionar credenciais.</p>';const box=$("#status");box.classList.toggle("show",s.status==="running"||s.status==="error"||s.status==="complete");box.classList.toggle("error",s.status==="error");$("#status-title").textContent=s.title;$("#status-message").textContent=s.message;$("#status-step").textContent=s.status==="running"?"Etapa "+s.step+" de 4":"";$("#status-error").textContent=s.error||"";$("#status-progress").style.width=(s.step*25)+"%";bind();document.querySelectorAll("[data-vault]").forEach(b=>b.onclick=()=>openVault(b.dataset.vault));applyTheme(document.documentElement.dataset.theme);syncConnectFlow(s)}
+function render(s){current=s;const html=s.installations.length?s.installations.map(card).join(""):'<p>Nenhuma estrutura ainda. Crie a primeira em poucos cliques.</p>';$("#home-structures").innerHTML=html;$("#all-structures").innerHTML=html;$("#summary").textContent=s.installations.filter(i=>i.status==="installed").length+" estrutura(s) instalada(s)";$("#tutorial-toggle").checked=s.tutorialEnabled;$("#onboarding-tutorial").checked=s.tutorialEnabled;document.querySelectorAll(".tutorial-card").forEach(x=>x.hidden=!s.tutorialEnabled);const profiles=s.profiles||[];$("#profiles").innerHTML=profiles.length?profiles.map(p=>'<div class="structure"><div><strong>'+esc(p.name)+'</strong><p>Conta autorizada no navegador</p></div><span class="pill"><i class="dot"></i>CONECTADA</span></div>').join(""):'<p>Nenhuma conta conectada. Clique em “Conectar conta”.</p>';$("#new-profile").innerHTML=profiles.length?profiles.map(p=>'<option value="'+esc(p.name)+'">'+esc(p.name)+'</option>').join(""):'<option value="">Conecte uma conta primeiro</option>';$("#install-new").disabled=!profiles.length;$("#vault-list").innerHTML=s.installations.length?s.installations.map(vaultCard).join(""):'<p>Crie uma estrutura antes de adicionar credenciais.</p>';const box=$("#status");box.classList.toggle("show",s.status==="running"||s.status==="error"||s.status==="complete");box.classList.toggle("error",s.status==="error");$("#status-title").textContent=s.title;$("#status-message").textContent=s.message;$("#status-step").textContent=s.status==="running"?"Etapa "+s.step+" de 4":"";$("#status-error").textContent=s.error||"";$("#status-progress").style.width=(s.step*25)+"%";bind();document.querySelectorAll("[data-vault]").forEach(b=>b.onclick=()=>openVault(b.dataset.vault));applyTheme(document.documentElement.dataset.theme);syncConnectFlow(s);if(!s.onboardingSeen&&!$("#onboarding-dialog").open)$("#onboarding-dialog").showModal()}
 async function openVault(id){vaultId=id;$("#vault-login").value="";$("#vault-password").value="";$("#vault-recovery").value="";$("#vault-password").type="password";$("#vault-reveal").textContent="Mostrar";const saved=(current.vault||[]).some(v=>v.installationId===id);$("#vault-delete").hidden=!saved;if(saved){const secret=await api("/api/vault/read",{id});$("#vault-login").value=secret.login;$("#vault-password").value=secret.password;$("#vault-recovery").value=secret.recovery||""}$("#vault-dialog").showModal()}
 async function state(){const r=await fetch("/api/state?token="+encodeURIComponent(token),{headers});render(await r.json())}
 function poll(){state().then(()=>{if(current.status==="running")setTimeout(poll,1200)})}function showError(e){alert(e.message)}
@@ -892,5 +919,6 @@ document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{document.query
 $("#open-cloudflare").onclick=()=>api("/api/cloudflare/open").catch(showError);$("#connect").onclick=()=>{setConnectPending(false);$("#connect-dialog").showModal()};$("#install-new").onclick=e=>{e.preventDefault();api("/api/install",{name:$("#new-name").value,profile:$("#new-profile").value}).then(()=>{$("#new-dialog").close();poll()}).catch(showError)};$("#connect-go").onclick=e=>{e.preventDefault();const profile=$("#profile-name").value.trim();if(!profile){showError(new Error("Informe um apelido para a conta."));return}openedAuthorizationURL="";authWindow=window.open("about:blank","krano-cloudflare-auth");try{if(authWindow){authWindow.document.title="Conectando Cloudflare";authWindow.document.body.innerHTML='<main style="font:16px system-ui;padding:40px;color:#222"><h1>Preparando Cloudflare…</h1><p>Esta página será redirecionada para a autorização oficial.</p></main>'}}catch{}setConnectPending(true,"Preparando conexão","A KRANO está preparando a autorização oficial.");api("/api/connect",{profile,managedBrowser:Boolean(authWindow)}).then(poll).catch(error=>{closeAuthorizationWindow();setConnectPending(false);showError(error)})};$("#remove-go").onclick=e=>{e.preventDefault();api("/api/remove",{id:removeId,confirmation:$("#remove-confirm").value,preserveD1:$("#preserve-d1").checked,preserveR2:$("#preserve-r2").checked,removeLocal:$("#remove-local").checked}).then(()=>{$("#remove-dialog").close();poll()}).catch(showError)};$("#tutorial-toggle").onchange=e=>api("/api/tutorial",{enabled:e.target.checked}).catch(showError);
 $("#vault-reveal").onclick=()=>{const show=$("#vault-password").type==="password";$("#vault-password").type=show?"text":"password";$("#vault-reveal").textContent=show?"Ocultar":"Mostrar"};$("#vault-copy").onclick=()=>navigator.clipboard.writeText($("#vault-password").value).then(()=>{$("#vault-copy").textContent="Copiada";setTimeout(()=>$("#vault-copy").textContent="Copiar",1200)}).catch(showError);$("#vault-save").onclick=e=>{e.preventDefault();api("/api/vault/save",{id:vaultId,login:$("#vault-login").value,password:$("#vault-password").value,recovery:$("#vault-recovery").value}).then(()=>{$("#vault-dialog").close();state()}).catch(showError)};$("#vault-delete").onclick=()=>{if(!confirm("Apagar esta credencial do cofre local?"))return;api("/api/vault/delete",{id:vaultId,confirmation:"APAGAR CREDENCIAL"}).then(()=>{$("#vault-dialog").close();state()}).catch(showError)};
 $("#theme-dark").onclick=()=>applyTheme("dark");$("#theme-light").onclick=()=>applyTheme("light");state();
+$("#onboarding-start").onclick=e=>{e.preventDefault();api("/api/onboarding",{enabled:$("#onboarding-tutorial").checked}).then(()=>{$("#onboarding-dialog").close();state()}).catch(showError)};
 $("#exit").onclick=()=>api("/api/exit").then(()=>{document.body.innerHTML='<main style="padding:40px"><h1>KRANO encerrada</h1><p>Você pode fechar esta aba.</p></main>'}).catch(showError);
 </script></body></html>`))

@@ -90,7 +90,10 @@ describe("instalador reproduzível", () => {
     expect(source("install.mjs")).toContain('["ci", "--no-audit", "--no-fund"]');
     const cli = source("packages/cli/bin/funnel-zero.mjs");
     expect(cli).toContain("KRANO_RESULT_JSON:");
-    expect(cli).toContain('const APP_VERSION = "0.4.5"');
+    expect(cli).toContain('const APP_VERSION = "0.4.6"');
+    expect(readFileSync(resolve(root, "scripts/uninstall.mjs"), "utf8")).toContain(
+      '["delete", installation.worker.name, "--force"]'
+    );
   });
 
   it("reconstrói, compara e publica releases somente em tags", () => {

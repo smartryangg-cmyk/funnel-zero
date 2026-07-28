@@ -33,12 +33,15 @@ function run(args, inputValue) {
     cwd: root,
     stdio: inputValue ? ["pipe", "inherit", "inherit"] : "inherit",
     input: inputValue,
-    env: process.env
+    env: {
+      ...process.env,
+      ...(installation.accountId ? { CLOUDFLARE_ACCOUNT_ID: installation.accountId } : {})
+    }
   });
   if (result.status !== 0) throw new Error(`Falha em: wrangler ${args.join(" ")}`);
 }
 
-run(["delete", installation.worker.name], "y\n");
+run(["delete", installation.worker.name, "--force"]);
 if (!preserveD1) {
   run(["d1", "delete", installation.d1.name, "--skip-confirmation"]);
 }
