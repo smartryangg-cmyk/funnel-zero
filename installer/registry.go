@@ -43,10 +43,16 @@ type desktopInstallation struct {
 	Status      string `json:"status"`
 }
 
+type desktopProfile struct {
+	Name        string `json:"name"`
+	ConnectedAt string `json:"connectedAt,omitempty"`
+}
+
 type desktopRegistry struct {
 	SchemaVersion   int                   `json:"schemaVersion"`
 	TutorialEnabled bool                  `json:"tutorialEnabled"`
 	OnboardingSeen  bool                  `json:"onboardingSeen"`
+	Profiles        []desktopProfile      `json:"profiles"`
 	Installations   []desktopInstallation `json:"installations"`
 	UpdatedAt       string                `json:"updatedAt"`
 }
@@ -163,6 +169,30 @@ func (registry *desktopRegistry) refresh() {
 		return strings.ToLower(items[i].Name) < strings.ToLower(items[j].Name)
 	})
 	registry.Installations = items
+	for _, item := range items {
+		if item.Profile != "" {
+			registry.upsertProfile(desktopProfile{Name: item.Profile})
+		}
+	}
+	sort.SliceStable(registry.Profiles, func(i, j int) bool {
+		return strings.ToLower(registry.Profiles[i].Name) < strings.ToLower(registry.Profiles[j].Name)
+	})
+}
+
+func (registry *desktopRegistry) upsertProfile(profile desktopProfile) {
+	profile.Name = normalizeProfileName(profile.Name)
+	if profile.Name == "" {
+		return
+	}
+	for index := range registry.Profiles {
+		if strings.EqualFold(registry.Profiles[index].Name, profile.Name) {
+			if profile.ConnectedAt != "" {
+				registry.Profiles[index].ConnectedAt = profile.ConnectedAt
+			}
+			return
+		}
+	}
+	registry.Profiles = append(registry.Profiles, profile)
 }
 
 func (registry *desktopRegistry) upsertInstallation(item desktopInstallation) {

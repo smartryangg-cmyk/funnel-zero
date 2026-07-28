@@ -1599,7 +1599,7 @@ body{
   --accent-contrast: #111216;
   --green: #aeb4be;
   --warning: #c8b98f;
-  --danger: #c89a9a;
+  --danger: #b5bac3;
   --red: #b5bac3;
   --violet: #b5bac3;
   --violet-light: #d6d9de;
@@ -1624,7 +1624,7 @@ body{
   --accent-contrast: #ffffff;
   --green: #4c5550;
   --warning: #7d6d46;
-  --danger: #795757;
+  --danger: #52565e;
   --red: #52565e;
   --violet: #52565e;
   --violet-light: #34373c;
@@ -2303,15 +2303,139 @@ textarea:focus-visible {
 .device-switch button.active,
 .tracking-tabs button.active,
 .inspector-tabs button.active {
-  color: #09090b !important;
+  color: var(--accent-contrast) !important;
 }
 
 .brand-mark {
-  border-color: #52525b;
-  background: linear-gradient(145deg, #3f3f46, #18181b);
-  box-shadow: 0 9px 28px #0008, inset 0 1px #ffffff30;
+  border-color: var(--border-strong);
+  background: var(--panel-2);
+  box-shadow: none;
 }
 
 .brand-mark i {
-  background: #fafafa;
+  background: var(--text);
+}
+
+.appearance-settings {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, .7fr);
+  align-items: center;
+  gap: 24px;
+  margin-bottom: 14px;
+}
+
+.appearance-settings h2 {
+  margin: 5px 0 7px;
+}
+
+.appearance-settings p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.appearance-options {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 9px;
+}
+
+.appearance-options button {
+  display: grid;
+  grid-template-columns: 28px 1fr;
+  gap: 2px 9px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  color: var(--text);
+  background: var(--panel-2);
+  text-align: left;
+  cursor: pointer;
+}
+
+.appearance-options button > span {
+  grid-row: 1 / 3;
+  display: grid;
+  place-items: center;
+  font-size: 17px;
+}
+
+.appearance-options button strong,
+.appearance-options button small {
+  display: block;
+}
+
+.appearance-options button small {
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.appearance-options button.active {
+  color: var(--accent-contrast);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.appearance-options button.active small {
+  color: inherit;
+  opacity: .7;
+}
+
+.button.danger,
+.danger-text,
+.installation-remove:hover {
+  color: var(--text) !important;
+  background: var(--panel-2) !important;
+  border-color: var(--border-strong) !important;
+}
+
+.danger-zone,
+.status-failed,
+.upload-card.error,
+.connection-recovery {
+  border-color: var(--border) !important;
+}
+
+.connection-recovery p {
+  color: var(--muted) !important;
+}
+
+.cloudflare-connect-card,
+.cloudflare-connect-card.connected,
+.cloudflare-command,
+.cloudflare-command.connected,
+.cloudflare-account-card {
+  border-color: var(--border) !important;
+  background: var(--panel) !important;
+}
+
+.cloudflare-mark,
+.connection-orb {
+  color: var(--text) !important;
+  background: var(--panel-2) !important;
+  border-color: var(--border-strong) !important;
+  box-shadow: none !important;
+}
+
+.connection-orb::before {
+  color: var(--text) !important;
+}
+
+.cloudflare-button {
+  color: var(--accent-contrast) !important;
+  background: var(--accent) !important;
+}
+
+.cloudflare-button:not(:disabled):hover {
+  background: var(--accent-light) !important;
+}
+
+.vturb-module-list button:hover {
+  background: var(--surface-hover) !important;
+}
+
+@media (max-width: 760px) {
+  .appearance-settings {
+    grid-template-columns: 1fr;
+  }
 }

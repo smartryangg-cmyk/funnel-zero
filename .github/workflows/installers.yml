@@ -83,20 +83,20 @@ jobs:
           INSTALLER_VERSION="$(sed -n 's/.*appVersion *= *"\([^"]*\)".*/\1/p' installer/main.go | head -n 1)"
           test "${GITHUB_REF_NAME}" = "v${INSTALLER_VERSION}"
           cp release/KRANO-Installer-Windows-x64.exe \
-            "release/KRANO-Installer-${GITHUB_REF_NAME}-Windows-x64.exe"
+            "release/KRANO-Desktop-${GITHUB_REF_NAME}-Windows-x64.exe"
           cp release/krano-installer-linux-x64 \
             "release/krano-installer-${GITHUB_REF_NAME}-linux-x64"
           (
             cd release
             sha256sum \
-              "KRANO-Installer-${GITHUB_REF_NAME}-Windows-x64.exe" \
+              "KRANO-Desktop-${GITHUB_REF_NAME}-Windows-x64.exe" \
               "krano-installer-${GITHUB_REF_NAME}-linux-x64" \
               > "SHA256SUMS-${GITHUB_REF_NAME}.txt"
           )
           gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1 || \
             gh release create "${GITHUB_REF_NAME}" --verify-tag --generate-notes --title "KRANO ${GITHUB_REF_NAME}"
           gh release upload "${GITHUB_REF_NAME}" \
-            "release/KRANO-Installer-${GITHUB_REF_NAME}-Windows-x64.exe" \
+            "release/KRANO-Desktop-${GITHUB_REF_NAME}-Windows-x64.exe" \
             "release/krano-installer-${GITHUB_REF_NAME}-linux-x64" \
             "release/SHA256SUMS-${GITHUB_REF_NAME}.txt" \
             release/KRANO-Installer-Windows-x64.exe \

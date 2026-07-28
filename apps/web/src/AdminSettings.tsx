@@ -8,7 +8,7 @@ import type {
   PageVersionSummary
 } from "../../../packages/shared/src/schemas";
 import { api } from "./api";
-import { Empty, Notice, PageHeader, StatusPill } from "./ui";
+import { AppearanceSettings, Empty, Notice, PageHeader, StatusPill } from "./ui";
 
 export function Domains() {
   const [provider, setProvider] = useState<DomainProviderStatus | null>(null);
@@ -443,10 +443,11 @@ export function Settings() {
     await api.updateExperiment(id, { status });
     await load();
   }
-  if (!settings) return <><PageHeader eyebrow="Configurações" title="Integrações e experimentos" subtitle="Carregando…" />{message && <Notice tone="error">{message}</Notice>}<div className="panel skeleton tall" /></>;
+  if (!settings) return <><PageHeader eyebrow="Configurações" title="Integrações e experimentos" subtitle="Carregando…" /><AppearanceSettings />{message && <Notice tone="error">{message}</Notice>}<div className="panel skeleton tall" /></>;
   return (
     <>
       <PageHeader eyebrow="Configurações" title="Conecte só o necessário." subtitle="Checkout externo, pixels com diagnóstico, webhooks idempotentes e A/B indicativo." />
+      <AppearanceSettings />
       {message && <Notice tone={message.includes("Falha") || message.includes("pelo menos") ? "warning" : "success"}>{message}</Notice>}
       <section className="settings-grid">
         <article className="panel"><span className="eyebrow">PIXELS</span><h2>Meta e GA4</h2><form className="form" onSubmit={(event) => void savePixels(event)}><label className="field"><span>Oferta</span><select required value={offerId} onChange={(event) => selectOffer(event.target.value)}>{settings.offers.map((offer) => <option key={offer.id} value={offer.id}>{offer.name}</option>)}</select></label><label className="field"><span>Meta Pixel ID</span><input value={metaPixelId} onChange={(event) => setMetaPixelId(event.target.value)} placeholder="Somente números" /></label><label className="field"><span>GA4 Measurement ID</span><input value={ga4Id} onChange={(event) => setGa4Id(event.target.value.toUpperCase())} placeholder="G-XXXXXXXX" /></label><button className="button secondary">Validar e salvar</button></form></article>

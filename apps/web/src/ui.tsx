@@ -12,7 +12,7 @@ export function Brand() {
     <div className="brand" aria-label="KRANO">
       <span className="brand-mark" aria-hidden="true"><i /><i /></span>
       <span className="brand-word">KRANO</span>
-      <small className="brand-version">v0.3</small>
+      <small className="brand-version">v0.4</small>
     </div>
   );
 }
@@ -80,13 +80,15 @@ const navigation: NavigationGroup[] = [
         label: "Conexões",
         match: ["/integrations", "/integrations/cloudflare"]
       },
-      { href: "/domains", icon: "globe", label: "Domínios", match: ["/domains", "/subdomains"] }
+      { href: "/domains", icon: "globe", label: "Domínios", match: ["/domains", "/subdomains"] },
+      { href: "/settings", icon: "book", label: "Configurações" }
     ]
   }
 ];
 
 const SIDEBAR_STATE_KEY = "krano:sidebar-collapsed";
 const THEME_STATE_KEY = "krano:theme";
+const THEME_CHANGE_EVENT = "krano:theme-change";
 type Theme = "light" | "dark";
 
 function initialTheme(): Theme {
@@ -97,6 +99,39 @@ function initialTheme(): Theme {
     // Usa a preferência do sistema quando o armazenamento estiver bloqueado.
   }
   return window.matchMedia?.("(prefers-color-scheme: light)").matches ? "light" : "dark";
+}
+
+export function AppearanceSettings() {
+  const [theme, setTheme] = useState<Theme>(initialTheme);
+
+  function chooseTheme(next: Theme) {
+    setTheme(next);
+    window.dispatchEvent(new CustomEvent<Theme>(THEME_CHANGE_EVENT, { detail: next }));
+  }
+
+  useEffect(() => {
+    const sync = (event: Event) => setTheme((event as CustomEvent<Theme>).detail);
+    window.addEventListener(THEME_CHANGE_EVENT, sync);
+    return () => window.removeEventListener(THEME_CHANGE_EVENT, sync);
+  }, []);
+
+  return (
+    <section className="panel appearance-settings" aria-labelledby="appearance-title">
+      <div>
+        <span className="eyebrow">APARÊNCIA</span>
+        <h2 id="appearance-title">Tema da plataforma</h2>
+        <p>Escolha claro ou escuro. A preferência fica salva neste navegador.</p>
+      </div>
+      <div className="appearance-options" role="group" aria-label="Escolher tema">
+        <button type="button" className={theme === "light" ? "active" : ""} aria-pressed={theme === "light"} onClick={() => chooseTheme("light")}>
+          <span aria-hidden="true">☀</span><strong>Claro</strong><small>Mais luminoso</small>
+        </button>
+        <button type="button" className={theme === "dark" ? "active" : ""} aria-pressed={theme === "dark"} onClick={() => chooseTheme("dark")}>
+          <span aria-hidden="true">☾</span><strong>Escuro</strong><small>Menos brilho</small>
+        </button>
+      </div>
+    </section>
+  );
 }
 
 function itemIsActive(item: NavigationItem, path: string): boolean {
@@ -135,6 +170,12 @@ export function AppShell({
       // O tema ainda funciona durante esta sessão.
     }
   }, [theme]);
+
+  useEffect(() => {
+    const updateTheme = (event: Event) => setTheme((event as CustomEvent<Theme>).detail);
+    window.addEventListener(THEME_CHANGE_EVENT, updateTheme);
+    return () => window.removeEventListener(THEME_CHANGE_EVENT, updateTheme);
+  }, []);
 
   function toggleSidebar() {
     setSidebarCollapsed((current) => {
@@ -187,15 +228,6 @@ export function AppShell({
           ))}
         </nav>
         <div className="sidebar-bottom">
-          <button
-            type="button"
-            className="theme-toggle"
-            onClick={() => setTheme((current) => current === "dark" ? "light" : "dark")}
-            aria-label={`Ativar tema ${theme === "dark" ? "claro" : "escuro"}`}
-          >
-            <span aria-hidden="true">{theme === "dark" ? "☀" : "☾"}</span>
-            <span><strong>Tema {theme === "dark" ? "escuro" : "claro"}</strong><small>Alternar aparência</small></span>
-          </button>
           <div className="free-badge">
             <span className="status-dot" />
             <div><strong>Plano gratuito protegido</strong><small>Limites monitorados pela KRANO</small></div>

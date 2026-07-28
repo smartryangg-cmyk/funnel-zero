@@ -14,7 +14,7 @@ func TestDiscoverInstallationReadsManifest(t *testing.T) {
 	}
 	manifest := `{
 	  "schemaVersion": 1,
-	  "appVersion": "0.4.1",
+	  "appVersion": "0.4.2",
 	  "installationName": "krano-teste",
 	  "accountId": "account-1",
 	  "worker": {"name":"krano-teste","url":"https://krano-teste.example.workers.dev"},
@@ -39,6 +39,17 @@ func TestRegistryUpsertDoesNotDuplicatePath(t *testing.T) {
 	registry.upsertInstallation(first)
 	if len(registry.Installations) != 1 || registry.Installations[0].Name != "atualizada" {
 		t.Fatalf("unexpected registry: %#v", registry.Installations)
+	}
+}
+
+func TestRegistryUpsertProfileDoesNotDuplicateName(t *testing.T) {
+	var registry desktopRegistry
+	registry.upsertProfile(desktopProfile{Name: "Cliente Principal"})
+	registry.upsertProfile(desktopProfile{Name: "cliente-principal", ConnectedAt: "2026-07-28T12:00:00Z"})
+	if len(registry.Profiles) != 1 ||
+		registry.Profiles[0].Name != "cliente-principal" ||
+		registry.Profiles[0].ConnectedAt == "" {
+		t.Fatalf("unexpected profiles: %#v", registry.Profiles)
 	}
 }
 
