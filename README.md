@@ -52,11 +52,16 @@ O KRANO Desktop permanece aberto como central local. Nas próximas execuções e
 lista todas as estruturas e oferece **abrir, atualizar, recuperar e remover**,
 além de perfis OAuth separados para múltiplas contas Cloudflare.
 
+O menu **Cofre local** permite salvar voluntariamente o login e a senha do painel.
+No Windows, os dados são criptografados com DPAPI e só podem ser desbloqueados
+pela mesma conta do Windows. Senhas da Cloudflare e da Meta continuam fora do app,
+pois essas integrações usam autorização OAuth.
+
 O arquivo correto tem aproximadamente **9,2 MB**. Se o download tiver apenas
 alguns KB, ele é uma página HTML do GitHub e não deve ser executado. Os hashes
 oficiais estão em [`installers/SHA256SUMS.txt`](./installers/SHA256SUMS.txt).
 
-Cada atualização também fica preservada em [GitHub Releases](https://github.com/smartryangg-cmyk/funnel-zero/releases), com a versão no nome do app, por exemplo `KRANO-Installer-v0.4.0-Windows-x64.exe`. Os arquivos sem versão no nome são apenas atalhos para a versão mais recente.
+Cada atualização também fica preservada em [GitHub Releases](https://github.com/smartryangg-cmyk/funnel-zero/releases), com a versão no nome do app, por exemplo `KRANO-Installer-v0.4.1-Windows-x64.exe`. Os arquivos sem versão no nome são apenas atalhos para a versão mais recente.
 
 **Linux 64 bits**
 

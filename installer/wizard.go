@@ -30,6 +30,7 @@ type wizardState struct {
 	ProjectPath     string                `json:"projectPath,omitempty"`
 	TutorialEnabled bool                  `json:"tutorialEnabled"`
 	Installations   []desktopInstallation `json:"installations"`
+	Vault           []vaultMetadata       `json:"vault"`
 }
 
 type operationRequest struct {
@@ -41,6 +42,14 @@ type operationRequest struct {
 	PreserveR2   bool   `json:"preserveR2"`
 	RemoveLocal  bool   `json:"removeLocal"`
 	Enabled      *bool  `json:"enabled"`
+}
+
+type vaultRequest struct {
+	ID           string `json:"id"`
+	Login        string `json:"login"`
+	Password     string `json:"password"`
+	Recovery     string `json:"recovery"`
+	Confirmation string `json:"confirmation"`
 }
 
 type wizardServer struct {
@@ -87,6 +96,9 @@ func runWizard(target, branch string, args []string) error {
 	mux.HandleFunc("/api/recover", wizard.recoverRequest)
 	mux.HandleFunc("/api/remove", wizard.removeRequest)
 	mux.HandleFunc("/api/tutorial", wizard.tutorialRequest)
+	mux.HandleFunc("/api/vault/save", wizard.vaultSaveRequest)
+	mux.HandleFunc("/api/vault/read", wizard.vaultReadRequest)
+	mux.HandleFunc("/api/vault/delete", wizard.vaultDeleteRequest)
 	mux.HandleFunc("/api/exit", wizard.exitRequest)
 	server := &http.Server{
 		Handler: mux, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 90 * time.Second,
@@ -131,6 +143,9 @@ func (wizard *wizardServer) readState(response http.ResponseWriter, request *htt
 	wizard.mu.Lock()
 	wizard.registry.refresh()
 	wizard.state.Installations = append([]desktopInstallation(nil), wizard.registry.Installations...)
+	if vault, err := loadVaultStore(); err == nil {
+		wizard.state.Vault = vaultMetadataList(vault)
+	}
 	state := wizard.state
 	wizard.mu.Unlock()
 	writeWizardJSON(response, state)
@@ -296,6 +311,106 @@ func (wizard *wizardServer) tutorialRequest(response http.ResponseWriter, reques
 		http.Error(response, "Não foi possível salvar a preferência.", http.StatusInternalServerError)
 		return
 	}
+	writeWizardJSON(response, map[string]bool{"ok": true})
+}
+
+func (wizard *wizardServer) decodeVault(response http.ResponseWriter, request *http.Request) (vaultRequest, bool) {
+	if request.Method != http.MethodPost || !wizard.authorized(request) {
+		http.NotFound(response, request)
+		return vaultRequest{}, false
+	}
+	var input vaultRequest
+	if err := json.NewDecoder(http.MaxBytesReader(response, request.Body, 16<<10)).Decode(&input); err != nil {
+		http.Error(response, "Pedido inválido.", http.StatusBadRequest)
+		return vaultRequest{}, false
+	}
+	return input, true
+}
+
+func (wizard *wizardServer) vaultSaveRequest(response http.ResponseWriter, request *http.Request) {
+	input, ok := wizard.decodeVault(response, request)
+	if !ok {
+		return
+	}
+	if len(input.Login) > 320 || len(input.Password) > 1024 || len(input.Recovery) > 2048 {
+		http.Error(response, "A credencial excede o tamanho permitido.", http.StatusBadRequest)
+		return
+	}
+	wizard.mu.RLock()
+	item, found := wizard.registry.findInstallation(input.ID)
+	wizard.mu.RUnlock()
+	if !found {
+		http.Error(response, "Estrutura não encontrada.", http.StatusNotFound)
+		return
+	}
+	store, err := loadVaultStore()
+	if err != nil {
+		http.Error(response, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	secret := vaultSecret{
+		Login:    strings.TrimSpace(input.Login),
+		Password: input.Password,
+		Recovery: strings.TrimSpace(input.Recovery),
+	}
+	if err := saveVaultSecret(&store, item.ID, item.Name, secret); err != nil {
+		http.Error(response, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := saveVaultStore(store); err != nil {
+		http.Error(response, "Não foi possível salvar o cofre local.", http.StatusInternalServerError)
+		return
+	}
+	wizard.mu.Lock()
+	wizard.state.Vault = vaultMetadataList(store)
+	wizard.mu.Unlock()
+	writeWizardJSON(response, map[string]bool{"ok": true})
+}
+
+func (wizard *wizardServer) vaultReadRequest(response http.ResponseWriter, request *http.Request) {
+	input, ok := wizard.decodeVault(response, request)
+	if !ok {
+		return
+	}
+	store, err := loadVaultStore()
+	if err != nil {
+		http.Error(response, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	secret, err := readVaultSecret(store, input.ID)
+	if errors.Is(err, os.ErrNotExist) {
+		http.Error(response, "Credencial não encontrada.", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		http.Error(response, "O Windows não conseguiu desbloquear esta credencial.", http.StatusForbidden)
+		return
+	}
+	writeWizardJSON(response, secret)
+}
+
+func (wizard *wizardServer) vaultDeleteRequest(response http.ResponseWriter, request *http.Request) {
+	input, ok := wizard.decodeVault(response, request)
+	if !ok {
+		return
+	}
+	if input.Confirmation != "APAGAR CREDENCIAL" {
+		http.Error(response, "Confirmação inválida.", http.StatusBadRequest)
+		return
+	}
+	store, err := loadVaultStore()
+	if err != nil {
+		http.Error(response, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	deleteVaultSecret(&store, input.ID)
+	if err := saveVaultStore(store); err != nil {
+		http.Error(response, "Não foi possível atualizar o cofre.", http.StatusInternalServerError)
+		return
+	}
+	wizard.mu.Lock()
+	wizard.state.Vault = vaultMetadataList(store)
+	wizard.mu.Unlock()
 	writeWizardJSON(response, map[string]bool{"ok": true})
 }
 
@@ -631,7 +746,7 @@ label{display:block;margin:14px 0 6px;font-size:12px;font-weight:700}input,selec
 @media(max-width:850px){.app{grid-template-columns:1fr}aside{position:static;height:auto;border-right:0;border-bottom:1px solid var(--line)}nav{display:flex;margin:18px 0 0;overflow:auto}.aside-foot{display:none}main{padding:20px}.half,.third{grid-column:span 12}.hero{grid-template-columns:1fr}.structure{grid-template-columns:1fr}}
 </style></head><body><div class="app">
 <aside><div class="brand"><b>K</b>KRANO</div><nav>
-<button class="active" data-view="home">Visão geral</button><button data-view="structures">Estruturas</button><button data-view="accounts">Contas Cloudflare</button><button data-view="guides">Tutoriais</button>
+<button class="active" data-view="home">Visão geral</button><button data-view="structures">Estruturas</button><button data-view="accounts">Contas Cloudflare</button><button data-view="vault">Cofre local</button><button data-view="guides">Tutoriais</button>
 </nav><div class="aside-foot">KRANO Desktop {{.Version}}<br>Seus dados ficam na sua Cloudflare.<br><button id="exit" style="margin-top:12px">Encerrar app</button></div></aside>
 <main><div id="status" class="status"><div class="row" style="justify-content:space-between"><strong id="status-title"></strong><span id="status-step"></span></div><p id="status-message"></p><div id="status-error"></div><div class="progress"><i id="status-progress"></i></div></div>
 <section class="view active" id="home"><div class="top"><div><h1>Olá, vamos construir.</h1><p>Uma central local para criar, manter e remover toda a sua estrutura KRANO.</p></div><button id="theme">Tema claro</button></div>
@@ -640,22 +755,27 @@ label{display:block;margin:14px 0 6px;font-size:12px;font-weight:700}input,selec
 <article class="card half"><h2>Faixa gratuita Cloudflare</h2><div class="usage" style="margin-top:15px"><div><div class="meter-head"><span>Workers</span><b>100 mil requisições/dia</b></div><div class="meter"><i></i></div></div><div><div class="meter-head"><span>R2 Standard</span><b>10 GB-mês</b></div><div class="meter"><i></i></div></div><div><div class="meter-head"><span>D1</span><b>5 GB total</b></div><div class="meter"><i></i></div></div><p class="note">O app mostra os limites do plano; o consumo real fica no painel Cloudflare até a API de métricas ser autorizada.</p></div></article></div></section>
 <section class="view" id="structures"><div class="top"><div><h1>Estruturas</h1><p>Instale, atualize, abra, recupere ou remova cada ambiente.</p></div><button class="primary" data-new>Nova estrutura</button></div><div class="card"><div id="all-structures" class="structures"></div></div></section>
 <section class="view" id="accounts"><div class="top"><div><h1>Contas Cloudflare</h1><p>Perfis OAuth separados evitam publicar uma estrutura na conta errada.</p></div><button class="primary" id="connect">Conectar conta</button></div><div class="grid"><article class="card half"><h2>Como funciona</h2><div class="steps"><div class="step"><b>1</b><div><strong>Dê um apelido</strong><p>Ex.: pessoal, cliente-a ou testes.</p></div></div><div class="step"><b>2</b><div><strong>Autorize no navegador</strong><p>A tela é oficial da Cloudflare; a KRANO não guarda sua senha.</p></div></div><div class="step"><b>3</b><div><strong>Escolha ao instalar</strong><p>Cada pasta fica vinculada ao perfil correto.</p></div></div></div></article><article class="card half"><h2>Perfis em uso</h2><div id="profiles" class="structures"></div></article></div></section>
+<section class="view" id="vault"><div class="top"><div><h1>Cofre local</h1><p>Guarde voluntariamente o login do painel para recuperar quando esquecer.</p></div></div><div class="grid"><article class="card"><h2>Protegido pelo Windows</h2><p>Login, senha e recuperação são criptografados para a sua conta atual do Windows. Nada é enviado à KRANO, Cloudflare ou Meta.</p><div class="note" style="margin-top:14px">Quem tiver acesso desbloqueado à sua conta do Windows poderá revelar estas credenciais. Use também PIN ou senha no Windows.</div></article><article class="card"><div id="vault-list" class="structures"></div></article></div></section>
 <section class="view" id="guides"><div class="top"><div><h1>Tutoriais opcionais</h1><p>Ative ou esconda as explicações quando quiser.</p></div><label class="check"><input id="tutorial-toggle" type="checkbox"> Mostrar tutoriais</label></div><div class="grid"><article class="card third"><h2>Primeira estrutura</h2><p>Conecte a Cloudflare, crie um nome e aguarde o app publicar Worker, D1 e R2.</p></article><article class="card third"><h2>Hospedagem de vídeo</h2><p>Os arquivos vão para o R2 Standard. O player otimizado é administrado no painel KRANO.</p></article><article class="card third"><h2>Meta Ads</h2><p>Depois do primeiro acesso, conecte a Meta dentro do painel para campanhas, pixels e tracking.</p></article><article class="card"><h2>Custos e cartão</h2><p>A KRANO trabalha em modo FREE_ONLY. O R2 tem franquia gratuita, mas a Cloudflare pode solicitar uma forma de pagamento ao ativar o produto. O app não recebe nem armazena dados de cartão.</p></article></div></section>
 </main></div>
 <dialog id="new-dialog"><form class="modal" method="dialog"><h2>Nova estrutura</h2><p>Use um nome curto e selecione o perfil Cloudflare já conectado.</p><label>Nome da estrutura</label><input id="new-name" placeholder="minha-oferta"><label>Perfil Cloudflare</label><input id="new-profile" placeholder="pessoal"><footer><button value="cancel">Cancelar</button><button class="primary" id="install-new" value="default">Instalar estrutura</button></footer></form></dialog>
 <dialog id="connect-dialog"><form class="modal" method="dialog"><h2>Conectar Cloudflare</h2><p>Será aberta a autorização oficial. Você pode manter vários logins organizados.</p><label>Apelido do perfil</label><input id="profile-name" placeholder="pessoal"><footer><button value="cancel">Cancelar</button><button class="primary" id="connect-go" value="default">Abrir autorização</button></footer></form></dialog>
 <dialog id="remove-dialog"><form class="modal" method="dialog"><h2>Remover estrutura</h2><p>Esta ação apaga recursos na Cloudflare. Faça backup antes se precisar dos dados.</p><label class="check"><input id="preserve-d1" type="checkbox" checked> Preservar banco D1</label><label class="check"><input id="preserve-r2" type="checkbox" checked> Preservar vídeos no R2</label><label class="check"><input id="remove-local" type="checkbox"> Apagar também a pasta local</label><label id="confirm-label">Confirmação</label><input id="remove-confirm"><footer><button value="cancel">Cancelar</button><button class="danger" id="remove-go" value="default">Remover</button></footer></form></dialog>
+<dialog id="vault-dialog"><form class="modal" method="dialog"><h2>Credencial do painel</h2><p>Preencha apenas se quiser usar o cofre local.</p><label>Login ou e-mail</label><input id="vault-login" autocomplete="username"><label>Senha</label><div class="row" style="flex-wrap:nowrap"><input id="vault-password" type="password" autocomplete="current-password"><button id="vault-reveal" type="button">Mostrar</button><button id="vault-copy" type="button">Copiar</button></div><label>Recuperação ou observação opcional</label><input id="vault-recovery"><footer><button id="vault-delete" class="danger" type="button" hidden>Apagar</button><button value="cancel">Cancelar</button><button class="primary" id="vault-save" value="default">Salvar no Windows</button></footer></form></dialog>
 <script>
-const token=new URLSearchParams(location.search).get("token")||"",headers={"X-Krano-Token":token,"Content-Type":"application/json"};let current=null,removeId="";
+const token=new URLSearchParams(location.search).get("token")||"",headers={"X-Krano-Token":token,"Content-Type":"application/json"};let current=null,removeId="",vaultId="";
 const $=s=>document.querySelector(s),esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 async function api(path,body={}){const r=await fetch(path,{method:"POST",headers,body:JSON.stringify(body)});if(!r.ok)throw new Error(await r.text());return r.json()}
 function card(i){const installed=i.status==="installed";return '<div class="structure"><div><h3>'+esc(i.name)+'</h3><p>'+esc(installed?i.workerUrl:"Ainda não instalada")+'</p><div class="meta"><span>'+esc(i.profile||"perfil padrão")+'</span><span>'+esc(i.version||"nova")+'</span><span>'+esc(i.path)+'</span></div></div><div class="row">'+(installed?'<button data-open="'+esc(i.id)+'">Abrir</button><button data-update="'+esc(i.id)+'">Atualizar</button><button data-recover="'+esc(i.id)+'">Recuperar</button><button class="danger" data-remove="'+esc(i.id)+'">Remover</button>':'<button class="primary" data-update="'+esc(i.id)+'">Instalar</button>')+'</div></div>'}
 function bind(){document.querySelectorAll("[data-open]").forEach(b=>b.onclick=()=>api("/api/open",{id:b.dataset.open}));document.querySelectorAll("[data-update]").forEach(b=>b.onclick=()=>api("/api/install",{id:b.dataset.update}).then(poll).catch(showError));document.querySelectorAll("[data-recover]").forEach(b=>b.onclick=()=>api("/api/recover",{id:b.dataset.recover}).then(poll).catch(showError));document.querySelectorAll("[data-remove]").forEach(b=>b.onclick=()=>{removeId=b.dataset.remove;const i=current.installations.find(x=>x.id===removeId);$("#confirm-label").textContent="Digite REMOVER "+i.name;$("#remove-confirm").value="";$("#remove-dialog").showModal()})}
-function render(s){current=s;const html=s.installations.length?s.installations.map(card).join(""):'<p>Nenhuma estrutura ainda. Crie a primeira em poucos cliques.</p>';$("#home-structures").innerHTML=html;$("#all-structures").innerHTML=html;$("#summary").textContent=s.installations.filter(i=>i.status==="installed").length+" estrutura(s) instalada(s)";$("#tutorial-toggle").checked=s.tutorialEnabled;const profiles=[...new Set(s.installations.map(i=>i.profile).filter(Boolean))];$("#profiles").innerHTML=profiles.length?profiles.map(p=>'<div class="structure"><div><strong>'+esc(p)+'</strong><p>Perfil OAuth local</p></div><span class="pill"><i class="dot"></i>EM USO</span></div>').join(""):'<p>Nenhum perfil usado ainda.</p>';const box=$("#status");box.classList.toggle("show",s.status==="running"||s.status==="error"||s.status==="complete");box.classList.toggle("error",s.status==="error");$("#status-title").textContent=s.title;$("#status-message").textContent=s.message;$("#status-step").textContent=s.status==="running"?"Etapa "+s.step+" de 4":"";$("#status-error").textContent=s.error||"";$("#status-progress").style.width=(s.step*25)+"%";bind()}
+function vaultCard(i){const saved=(current.vault||[]).find(v=>v.installationId===i.id);return '<div class="structure"><div><h3>'+esc(i.name)+'</h3><p>'+(saved?'Credencial protegida · atualizada '+esc(new Date(saved.updatedAt).toLocaleString("pt-BR")):'Nenhuma credencial salva')+'</p></div><div class="row"><button data-vault="'+esc(i.id)+'">'+(saved?'Abrir cofre':'Adicionar login')+'</button></div></div>'}
+function render(s){current=s;const html=s.installations.length?s.installations.map(card).join(""):'<p>Nenhuma estrutura ainda. Crie a primeira em poucos cliques.</p>';$("#home-structures").innerHTML=html;$("#all-structures").innerHTML=html;$("#summary").textContent=s.installations.filter(i=>i.status==="installed").length+" estrutura(s) instalada(s)";$("#tutorial-toggle").checked=s.tutorialEnabled;const profiles=[...new Set(s.installations.map(i=>i.profile).filter(Boolean))];$("#profiles").innerHTML=profiles.length?profiles.map(p=>'<div class="structure"><div><strong>'+esc(p)+'</strong><p>Perfil OAuth local</p></div><span class="pill"><i class="dot"></i>EM USO</span></div>').join(""):'<p>Nenhum perfil usado ainda.</p>';$("#vault-list").innerHTML=s.installations.length?s.installations.map(vaultCard).join(""):'<p>Crie uma estrutura antes de adicionar credenciais.</p>';const box=$("#status");box.classList.toggle("show",s.status==="running"||s.status==="error"||s.status==="complete");box.classList.toggle("error",s.status==="error");$("#status-title").textContent=s.title;$("#status-message").textContent=s.message;$("#status-step").textContent=s.status==="running"?"Etapa "+s.step+" de 4":"";$("#status-error").textContent=s.error||"";$("#status-progress").style.width=(s.step*25)+"%";bind();document.querySelectorAll("[data-vault]").forEach(b=>b.onclick=()=>openVault(b.dataset.vault))}
+async function openVault(id){vaultId=id;$("#vault-login").value="";$("#vault-password").value="";$("#vault-recovery").value="";$("#vault-password").type="password";$("#vault-reveal").textContent="Mostrar";const saved=(current.vault||[]).some(v=>v.installationId===id);$("#vault-delete").hidden=!saved;if(saved){const secret=await api("/api/vault/read",{id});$("#vault-login").value=secret.login;$("#vault-password").value=secret.password;$("#vault-recovery").value=secret.recovery||""}$("#vault-dialog").showModal()}
 async function state(){const r=await fetch("/api/state?token="+encodeURIComponent(token),{headers});render(await r.json())}
 function poll(){state().then(()=>{if(current.status==="running")setTimeout(poll,1200)})}function showError(e){alert(e.message)}
 document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{document.querySelectorAll("nav button,.view").forEach(x=>x.classList.remove("active"));b.classList.add("active");$("#"+b.dataset.view).classList.add("active")});document.querySelectorAll("[data-new]").forEach(b=>b.onclick=()=>$("#new-dialog").showModal());document.querySelectorAll("[data-guide]").forEach(b=>b.onclick=()=>document.querySelector('[data-view="guides"]').click());
 $("#connect").onclick=()=>$("#connect-dialog").showModal();$("#install-new").onclick=e=>{e.preventDefault();api("/api/install",{name:$("#new-name").value,profile:$("#new-profile").value}).then(()=>{$("#new-dialog").close();poll()}).catch(showError)};$("#connect-go").onclick=e=>{e.preventDefault();api("/api/connect",{profile:$("#profile-name").value}).then(()=>{$("#connect-dialog").close();poll()}).catch(showError)};$("#remove-go").onclick=e=>{e.preventDefault();api("/api/remove",{id:removeId,confirmation:$("#remove-confirm").value,preserveD1:$("#preserve-d1").checked,preserveR2:$("#preserve-r2").checked,removeLocal:$("#remove-local").checked}).then(()=>{$("#remove-dialog").close();poll()}).catch(showError)};$("#tutorial-toggle").onchange=e=>api("/api/tutorial",{enabled:e.target.checked}).catch(showError);
+$("#vault-reveal").onclick=()=>{const show=$("#vault-password").type==="password";$("#vault-password").type=show?"text":"password";$("#vault-reveal").textContent=show?"Ocultar":"Mostrar"};$("#vault-copy").onclick=()=>navigator.clipboard.writeText($("#vault-password").value).then(()=>{$("#vault-copy").textContent="Copiada";setTimeout(()=>$("#vault-copy").textContent="Copiar",1200)}).catch(showError);$("#vault-save").onclick=e=>{e.preventDefault();api("/api/vault/save",{id:vaultId,login:$("#vault-login").value,password:$("#vault-password").value,recovery:$("#vault-recovery").value}).then(()=>{$("#vault-dialog").close();state()}).catch(showError)};$("#vault-delete").onclick=()=>{if(!confirm("Apagar esta credencial do cofre local?"))return;api("/api/vault/delete",{id:vaultId,confirmation:"APAGAR CREDENCIAL"}).then(()=>{$("#vault-dialog").close();state()}).catch(showError)};
 $("#theme").onclick=()=>{const light=document.documentElement.dataset.theme!=="light";document.documentElement.dataset.theme=light?"light":"dark";$("#theme").textContent=light?"Tema escuro":"Tema claro"};state();
 $("#exit").onclick=()=>api("/api/exit").then(()=>{document.body.innerHTML='<main style="padding:40px"><h1>KRANO encerrada</h1><p>Você pode fechar esta aba.</p></main>'}).catch(showError);
 </script></body></html>`))

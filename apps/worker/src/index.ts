@@ -52,7 +52,7 @@ interface CountRow {
   count: number;
 }
 
-const APP_VERSION = "0.4.0";
+const APP_VERSION = "0.4.1";
 const PRIVATE_PAGE_PREFIXES = [
   "/home",
   "/dashboard",

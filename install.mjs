@@ -22,7 +22,7 @@ function run(command, args) {
 
 function printHelp() {
   console.log(`
-KRANO 0.4.0 — aplicativo desktop de instalação e gerenciamento
+KRANO 0.4.1 — aplicativo desktop de instalação e gerenciamento
 
 Uso:
   node install.mjs

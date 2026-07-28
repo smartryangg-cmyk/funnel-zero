@@ -12,6 +12,9 @@ recuperar acesso e remover recursos com confirmação explícita. Ele prepara um
 versão portátil e verificada do Node.js quando necessário. Git, Node, Wrangler e
 Docker não precisam ser instalados manualmente.
 
+O **Cofre local** opcional protege logins do painel com a DPAPI do Windows.
+Credenciais não são gravadas em texto aberto nem enviadas para serviços externos.
+
 ## Compilar
 
 Com Go 1.24 ou superior:
