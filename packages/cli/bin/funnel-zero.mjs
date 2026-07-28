@@ -2,7 +2,7 @@
 
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createInterface } from "node:readline/promises";
@@ -14,10 +14,11 @@ const manifestPath = join(stateDir, "installation.json");
 const setupUrlPath = join(stateDir, "setup-url.txt");
 const recoveryUrlPath = join(stateDir, "recovery-url.txt");
 const configPath = join(projectRoot, "wrangler.jsonc");
+const configExamplePath = join(projectRoot, "wrangler.example.jsonc");
 const wranglerBin = join(projectRoot, "node_modules", "wrangler", "bin", "wrangler.js");
 const isWindows = process.platform === "win32";
 const npmCommand = isWindows ? "npm.cmd" : "npm";
-const APP_VERSION = "0.4.6";
+const APP_VERSION = "0.4.7";
 const RESULT_PREFIX = "KRANO_RESULT_JSON:";
 const REQUIRED_WRANGLER_SCOPES = [
   "account:read",
@@ -73,9 +74,11 @@ function emitResult(result) {
 }
 
 function runWrangler(wranglerArgs, options = {}) {
+  const commandName = wranglerArgs[0] ?? "";
+  const supportsNamedProfile = !["whoami", "login", "logout"].includes(commandName);
   const result = spawnSync(
     process.execPath,
-    [wranglerBin, ...(profileName ? ["--profile", profileName] : []), ...wranglerArgs],
+    [wranglerBin, ...(profileName && supportsNamedProfile ? ["--profile", profileName] : []), ...wranglerArgs],
     {
       cwd: projectRoot,
       encoding: "utf8",
@@ -123,6 +126,12 @@ function saveManifest(manifest) {
 }
 
 function readConfig() {
+  if (!existsSync(configPath)) {
+    if (!existsSync(configExamplePath)) {
+      fail("wrangler.example.jsonc não foi encontrado no pacote da KRANO.");
+    }
+    copyFileSync(configExamplePath, configPath);
+  }
   return JSON.parse(readFileSync(configPath, "utf8"));
 }
 
