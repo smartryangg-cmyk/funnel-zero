@@ -87,10 +87,12 @@ describe("endurecimento de autenticação", () => {
 
 describe("instalador reproduzível", () => {
   it("usa npm ci e um sinal estruturado para o executável", () => {
-    expect(source("install.mjs")).toContain('["ci", "--no-audit", "--no-fund"]');
+    const bootstrap = source("install.mjs");
+    expect(bootstrap).toContain('["ci", "--no-audit", "--no-fund"]');
+    expect(bootstrap).toContain("shell: isWindows && command === npmCommand");
     const cli = source("packages/cli/bin/funnel-zero.mjs");
     expect(cli).toContain("KRANO_RESULT_JSON:");
-    expect(cli).toContain('const APP_VERSION = "0.4.8"');
+    expect(cli).toContain('const APP_VERSION = "0.4.9"');
     expect(cli).toContain('!["whoami", "login", "logout"].includes(commandName)');
     expect(cli).toContain("copyFileSync(configExamplePath, configPath)");
     expect(cli).toContain('args.has("--enable-r2")');

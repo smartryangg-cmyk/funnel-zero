@@ -197,7 +197,7 @@ func TestExtractTarGzPreservesSafeNodeSymlinksOnLinux(t *testing.T) {
 }
 
 func TestParseCLIResultUsesStructuredSignal(t *testing.T) {
-	output := "progresso\n" + resultPrefix + `{"ok":true,"action":"onboarding","url":"https://krano.example/setup?token=abc","recoveryFile":"C:\\KRANO\\.funnel-zero\\setup-url.txt","version":"0.4.8"}` + "\n"
+	output := "progresso\n" + resultPrefix + `{"ok":true,"action":"onboarding","url":"https://krano.example/setup?token=abc","recoveryFile":"C:\\KRANO\\.funnel-zero\\setup-url.txt","version":"0.4.9"}` + "\n"
 	result, err := parseCLIResult(output)
 	if err != nil {
 		t.Fatalf("valid result was rejected: %v", err)

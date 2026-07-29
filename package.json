@@ -1,6 +1,6 @@
 {
   "name": "krano",
-  "version": "0.4.8",
+  "version": "0.4.9",
   "private": true,
   "description": "KRANO — plataforma open source de ofertas, vídeos e funis autohospedada na Cloudflare.",
   "license": "MIT",

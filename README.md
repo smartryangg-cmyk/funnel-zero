@@ -61,7 +61,7 @@ O arquivo correto tem aproximadamente **9,2 MB**. Se o download tiver apenas
 alguns KB, ele é uma página HTML do GitHub e não deve ser executado. Os hashes
 oficiais estão em [`installers/SHA256SUMS.txt`](./installers/SHA256SUMS.txt).
 
-Cada atualização também fica preservada em [GitHub Releases](https://github.com/smartryangg-cmyk/funnel-zero/releases), com a versão no nome do app, por exemplo `KRANO-Desktop-v0.4.8-Windows-x64.exe`. Os arquivos sem versão no nome são apenas atalhos para a versão mais recente.
+Cada atualização também fica preservada em [GitHub Releases](https://github.com/smartryangg-cmyk/funnel-zero/releases), com a versão no nome do app, por exemplo `KRANO-Desktop-v0.4.9-Windows-x64.exe`. Os arquivos sem versão no nome são apenas atalhos para a versão mais recente.
 
 **Linux 64 bits**
 

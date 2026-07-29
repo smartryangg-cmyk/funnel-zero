@@ -14,7 +14,7 @@ function run(command, args) {
   const result = spawnSync(command, args, {
     cwd: root,
     stdio: "inherit",
-    shell: isWindows
+    shell: isWindows && command === npmCommand
   });
   if (result.error) throw result.error;
   if (result.status !== 0) process.exit(result.status ?? 1);
@@ -22,14 +22,14 @@ function run(command, args) {
 
 function printHelp() {
   console.log(`
-KRANO 0.4.8 — aplicativo desktop de instalação e gerenciamento
+KRANO 0.4.9 — aplicativo desktop de instalação e gerenciamento
 
 Uso:
   node install.mjs
   node install.mjs recover
 
 O instalador prepara as dependências, abre a autorização oficial da Cloudflare,
-cria ou reutiliza Worker, D1 e R2, aplica as migrations e entrega a URL do painel.
+cria ou reutiliza Worker + D1 e, se solicitado, ativa o R2 para VSL.
 
 Requisito: Node.js 20 ou superior.
 `);

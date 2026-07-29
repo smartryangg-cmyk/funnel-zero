@@ -14,7 +14,7 @@ func TestDiscoverInstallationReadsManifest(t *testing.T) {
 	}
 	manifest := `{
 	  "schemaVersion": 1,
-	  "appVersion": "0.4.8",
+	  "appVersion": "0.4.9",
 	  "installationName": "krano-teste",
 	  "accountId": "account-1",
 	  "worker": {"name":"krano-teste","url":"https://krano-teste.example.workers.dev"},
@@ -42,7 +42,7 @@ func TestDiscoverInstallationWithoutR2(t *testing.T) {
 	}
 	manifest := `{
 	  "schemaVersion": 1,
-	  "appVersion": "0.4.8",
+	  "appVersion": "0.4.9",
 	  "installationName": "krano-base",
 	  "accountId": "account-1",
 	  "worker": {"name":"krano-base","url":"https://krano-base.example.workers.dev"},
