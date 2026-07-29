@@ -54,6 +54,16 @@ export type MultipartValidationResult =
 const MAX_MULTIPART_PART_BYTES = 16 * 1024 * 1024;
 const MIN_NON_FINAL_PART_BYTES = 5 * 1024 * 1024;
 
+function mediaBinding(env: Env): R2Bucket | null {
+  return (env as Env & { MEDIA?: R2Bucket }).MEDIA ?? null;
+}
+
+function requireMediaBinding(env: Env): R2Bucket {
+  const media = mediaBinding(env);
+  if (!media) throw new ValidationError("Ative o módulo Hospedagem de VSL para usar a biblioteca de mídia.");
+  return media;
+}
+
 export function validateMultipartParts(
   declaredBytes: number,
   parts: MultipartPartDescriptor[],
@@ -292,7 +302,7 @@ async function initiate(
   const id = randomId();
   const extension = (originalName.split(".").pop() ?? "bin").toLowerCase().slice(0, 12);
   const objectKey = `assets/${new Date().toISOString().slice(0, 10)}/${id}-${sanitizeFileName(originalName)}`;
-  const multipart = await env.MEDIA.createMultipartUpload(objectKey, {
+  const multipart = await requireMediaBinding(env).createMultipartUpload(objectKey, {
     httpMetadata: { contentType: mime },
     customMetadata: { assetId: id, originalName: sanitizeFileName(originalName) }
   });
@@ -375,7 +385,7 @@ async function uploadPart(
     throw new ValidationError("Parte vazia ou maior que 16 MB.");
   }
   if (!request.body) throw new ValidationError("Parte vazia.");
-  const upload = env.MEDIA.resumeMultipartUpload(asset.object_key, asset.multipart_upload_id);
+  const upload = requireMediaBinding(env).resumeMultipartUpload(asset.object_key, asset.multipart_upload_id);
   const uploaded = await upload.uploadPart(partNumber, request.body);
   await env.DB.prepare(
     `INSERT INTO asset_upload_parts(asset_id, part_number, etag, byte_size)
@@ -404,7 +414,7 @@ async function invalidateMultipartUpload(
 ): Promise<void> {
   if (asset.multipart_upload_id) {
     try {
-      await env.MEDIA.resumeMultipartUpload(
+      await requireMediaBinding(env).resumeMultipartUpload(
         asset.object_key,
         asset.multipart_upload_id
       ).abort();
@@ -413,7 +423,7 @@ async function invalidateMultipartUpload(
     }
   }
   try {
-    await env.MEDIA.delete(asset.object_key);
+    await requireMediaBinding(env).delete(asset.object_key);
   } catch {
     // A linha fica como failed e a limpeza agendada pode repetir a remoção.
   }
@@ -467,7 +477,7 @@ async function complete(env: Env, user: SessionUser, id: string): Promise<Respon
       "A conclusão ultrapassaria o limite de proteção configurado."
     );
   }
-  const upload = env.MEDIA.resumeMultipartUpload(asset.object_key, asset.multipart_upload_id);
+  const upload = requireMediaBinding(env).resumeMultipartUpload(asset.object_key, asset.multipart_upload_id);
   let object: R2Object;
   try {
     object = await upload.complete(
@@ -511,9 +521,9 @@ async function abort(env: Env, user: SessionUser, id: string): Promise<Response>
   const asset = await findAsset(env, id);
   if (!asset) return errorResponse(404, "NOT_FOUND", "Arquivo não encontrado.");
   if (asset.multipart_upload_id) {
-    await env.MEDIA.resumeMultipartUpload(asset.object_key, asset.multipart_upload_id).abort();
+    await requireMediaBinding(env).resumeMultipartUpload(asset.object_key, asset.multipart_upload_id).abort();
   } else if (asset.upload_status === "ready") {
-    await env.MEDIA.delete(asset.object_key);
+    await requireMediaBinding(env).delete(asset.object_key);
   }
   await env.DB.batch([
     env.DB.prepare(
@@ -679,6 +689,13 @@ export async function handleAssetsApi(
   url: URL
 ): Promise<Response | null> {
   if (!url.pathname.startsWith("/api/assets")) return null;
+  if (!mediaBinding(env)) {
+    return errorResponse(
+      409,
+      "MEDIA_MODULE_DISABLED",
+      "Hospedagem de VSL não está ativa. Habilite o módulo no aplicativo KRANO."
+    );
+  }
   if (["POST", "PATCH", "PUT", "DELETE"].includes(request.method) && !requireSameOrigin(request)) {
     return errorResponse(403, "ORIGIN_INVALID", "Origem inválida.");
   }
@@ -718,6 +735,9 @@ export async function handleAssetsApi(
 }
 
 export async function serveMedia(request: Request, env: Env, url: URL): Promise<Response> {
+  if (!mediaBinding(env)) {
+    return new Response("Hospedagem de VSL não está ativa.", { status: 404 });
+  }
   const id = url.pathname.slice("/media/".length).split("/")[0];
   const asset = await findAsset(env, id);
   if (!asset || asset.upload_status !== "ready") {
@@ -733,7 +753,7 @@ export async function serveMedia(request: Request, env: Env, url: URL): Promise<
       return new Response("Referência inválida.", { status: 403 });
     }
   }
-  const object = await env.MEDIA.get(asset.object_key, {
+  const object = await requireMediaBinding(env).get(asset.object_key, {
     range: request.headers,
     onlyIf: request.headers
   });

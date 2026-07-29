@@ -14,7 +14,7 @@ func TestDiscoverInstallationReadsManifest(t *testing.T) {
 	}
 	manifest := `{
 	  "schemaVersion": 1,
-	  "appVersion": "0.4.7",
+	  "appVersion": "0.4.8",
 	  "installationName": "krano-teste",
 	  "accountId": "account-1",
 	  "worker": {"name":"krano-teste","url":"https://krano-teste.example.workers.dev"},
@@ -28,6 +28,34 @@ func TestDiscoverInstallationReadsManifest(t *testing.T) {
 	item := discoverInstallation(root, "pessoal")
 	if item.Status != "installed" || item.Name != "krano-teste" || item.Profile != "pessoal" {
 		t.Fatalf("manifest was not discovered: %#v", item)
+	}
+	if !item.MediaEnabled {
+		t.Fatal("legacy manifest with an R2 bucket must keep media enabled")
+	}
+}
+
+func TestDiscoverInstallationWithoutR2(t *testing.T) {
+	root := t.TempDir()
+	state := filepath.Join(root, ".funnel-zero")
+	if err := os.MkdirAll(state, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	manifest := `{
+	  "schemaVersion": 1,
+	  "appVersion": "0.4.8",
+	  "installationName": "krano-base",
+	  "accountId": "account-1",
+	  "worker": {"name":"krano-base","url":"https://krano-base.example.workers.dev"},
+	  "d1": {"name":"krano-base-db","id":"db-1"},
+	  "r2": {"enabled":false,"name":"","storageClass":"Standard"},
+	  "freeOnly": true
+	}`
+	if err := os.WriteFile(filepath.Join(state, "installation.json"), []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	item := discoverInstallation(root, "pessoal")
+	if item.MediaEnabled {
+		t.Fatal("base structure must not require R2")
 	}
 }
 

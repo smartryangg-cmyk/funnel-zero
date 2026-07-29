@@ -34,6 +34,7 @@
     "CLOUDFLARE_ACCOUNT_ID": "",
     "ENVIRONMENT": "development",
     "FREE_ONLY": "true",
+    "MEDIA_ENABLED": "true",
     "MAX_STORAGE_BYTES": "10737418240",
     "MAX_FILE_BYTES": "524288000",
     "META_GRAPH_VERSION": "v25.0",

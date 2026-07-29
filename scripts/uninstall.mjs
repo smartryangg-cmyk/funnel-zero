@@ -14,7 +14,8 @@ console.log("Funnel Zero — desinstalação segura");
 console.log("Somente estes recursos do manifesto podem ser removidos:");
 console.log(`  Worker: ${installation.worker.name}`);
 console.log(`  D1:     ${installation.d1.name} (${installation.d1.id})`);
-console.log(`  R2:     ${installation.r2.name}`);
+const hasR2 = Boolean(installation.r2?.enabled || installation.r2?.name);
+console.log(`  R2:     ${hasR2 ? installation.r2.name : "não ativado"}`);
 console.log();
 console.log("Recomendação: execute `npm run backup` antes.");
 
@@ -45,7 +46,7 @@ run(["delete", installation.worker.name, "--force"]);
 if (!preserveD1) {
   run(["d1", "delete", installation.d1.name, "--skip-confirmation"]);
 }
-if (!preserveR2) {
+if (hasR2 && !preserveR2) {
   run(["r2", "bucket", "delete", installation.r2.name]);
 }
 console.log("Desinstalação concluída. Recursos preservados não foram alterados.");

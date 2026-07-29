@@ -52,7 +52,7 @@ interface CountRow {
   count: number;
 }
 
-const APP_VERSION = "0.4.7";
+const APP_VERSION = "0.4.8";
 const PRIVATE_PAGE_PREFIXES = [
   "/home",
   "/dashboard",
@@ -424,6 +424,8 @@ async function handleApi(
   }
 
   if (request.method === "GET" && url.pathname === "/api/bootstrap") {
+    const mediaEnabled =
+      env.MEDIA_ENABLED === "true" && Boolean((env as Env & { MEDIA?: R2Bucket }).MEDIA);
     const [installed, user] = await Promise.all([
       isInstalled(env),
       getCurrentUser(request, env, ctx)
@@ -432,7 +434,8 @@ async function handleApi(
       installed,
       user,
       environment: env.ENVIRONMENT,
-      freeOnly: env.FREE_ONLY === "true"
+      freeOnly: env.FREE_ONLY === "true",
+      mediaEnabled
     };
     return json(response);
   }
@@ -536,9 +539,10 @@ async function scheduled(env: Env): Promise<void> {
      WHERE upload_status = 'uploading' AND multipart_upload_id IS NOT NULL
        AND updated_at < datetime('now', '-1 day') LIMIT 100`
   ).all<{ id: string; object_key: string; multipart_upload_id: string }>();
-  for (const asset of abandoned.results) {
+  const media = (env as Env & { MEDIA?: R2Bucket }).MEDIA;
+  for (const asset of media ? abandoned.results : []) {
     try {
-      await env.MEDIA.resumeMultipartUpload(asset.object_key, asset.multipart_upload_id).abort();
+      await media!.resumeMultipartUpload(asset.object_key, asset.multipart_upload_id).abort();
     } catch {
       // O R2 também remove uploads multipart abandonados pela regra de ciclo de vida.
     }

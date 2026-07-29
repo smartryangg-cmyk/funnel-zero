@@ -111,7 +111,7 @@ export default function App() {
   else if (funnelMatch) content = <Funnels selectedId={funnelMatch[1]} />;
   else if (path === "/pages") content = <Pages />;
   else if (editorMatch) content = <Pages editorId={editorMatch[1]} />;
-  else if (path === "/media-library") content = <MediaLibrary />;
+  else if (path === "/media-library") content = <MediaLibrary mediaEnabled={bootstrap.data.mediaEnabled} />;
   else if (path === "/tracking") content = <PixelCenter />;
   else if (path === "/meta-ads") content = <MetaAds />;
   else if (path === "/domains") content = <Domains />;

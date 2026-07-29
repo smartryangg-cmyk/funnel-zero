@@ -233,6 +233,7 @@ export async function readDashboard(
     )
   ];
 
+  const media = (env as Env & { MEDIA?: R2Bucket }).MEDIA;
   const [results, dailyRows, quizRows, utmRows, eventRows, storage] = await Promise.all([
     env.DB.batch<CountRow>(statements),
     bindEvent(
@@ -284,7 +285,9 @@ export async function readDashboard(
        LIMIT 40`,
       since
     ).all<EventRow>(),
-    env.MEDIA.list({ limit: 1000 })
+    media
+      ? media.list({ limit: 1000 })
+      : Promise.resolve({ objects: [] as R2Object[], truncated: false })
   ]);
   const values = results.map((result) => Number(result.results[0]?.value ?? 0));
   const storageBytes = storage.objects.reduce((total, object) => total + object.size, 0);

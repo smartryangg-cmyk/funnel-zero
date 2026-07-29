@@ -127,6 +127,7 @@ export interface BootstrapResponse {
   user: SessionUser | null;
   environment: string;
   freeOnly: boolean;
+  mediaEnabled: boolean;
 }
 
 export type EntityStatus = "draft" | "active" | "published" | "archived";

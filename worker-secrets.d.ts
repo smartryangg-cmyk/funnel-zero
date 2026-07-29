@@ -5,7 +5,7 @@
  */
 declare global {
   interface Env {
-    MEDIA: R2Bucket;
+    MEDIA?: R2Bucket;
     DB: D1Database;
     ASSETS: Fetcher;
     APP_NAME: string;
@@ -13,6 +13,7 @@ declare global {
     CLOUDFLARE_ACCOUNT_ID?: string;
     ENVIRONMENT: string;
     FREE_ONLY: string;
+    MEDIA_ENABLED: string;
     MAX_STORAGE_BYTES: string;
     MAX_FILE_BYTES: string;
     META_GRAPH_VERSION: string;

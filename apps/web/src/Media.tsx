@@ -10,7 +10,7 @@ interface UploadState {
   message?: string;
 }
 
-export function MediaLibrary() {
+export function MediaLibrary({ mediaEnabled }: { mediaEnabled: boolean }) {
   const [assets, setAssets] = useState<AssetSummary[]>([]);
   const [offers, setOffers] = useState<OfferSummary[]>([]);
   const [offerId, setOfferId] = useState("");
@@ -27,7 +27,9 @@ export function MediaLibrary() {
       setError(caught instanceof Error ? caught.message : "Falha ao carregar biblioteca.");
     }
   }
-  useEffect(() => { void load(); }, []);
+  useEffect(() => {
+    if (mediaEnabled) void load();
+  }, [mediaEnabled]);
 
   async function uploadFile(file: File) {
     let assetId = "";
@@ -89,6 +91,24 @@ export function MediaLibrary() {
     await load();
   }
   const used = assets.filter((asset) => asset.uploadStatus === "ready").reduce((total, asset) => total + asset.byteSize, 0);
+  if (!mediaEnabled) {
+    return (
+      <>
+        <PageHeader
+          eyebrow="Mídia e VSL"
+          title="Hospedagem de vídeo é opcional."
+          subtitle="Sua estrutura principal já funciona com sites, funis, tracking e dashboard sem ativar o R2."
+        />
+        <section className="panel">
+          <Empty
+            icon="▶"
+            title="Ative somente quando precisar hospedar VSLs"
+            text="Abra o KRANO Desktop, localize esta estrutura e clique em “Ativar vídeos”. A Cloudflare poderá solicitar a ativação do R2 e uma forma de pagamento, embora exista franquia gratuita."
+          />
+        </section>
+      </>
+    );
+  }
   return (
     <>
       <PageHeader

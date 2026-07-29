@@ -43,6 +43,7 @@
     "APP_NAME": "Funnel Zero",
     "ENVIRONMENT": "development",
     "FREE_ONLY": "true",
+    "MEDIA_ENABLED": "true",
     "MAX_STORAGE_BYTES": "10737418240",
     "MAX_FILE_BYTES": "524288000",
     "SESSION_DAYS": "7"

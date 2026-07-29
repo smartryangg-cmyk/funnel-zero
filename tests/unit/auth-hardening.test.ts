@@ -90,9 +90,12 @@ describe("instalador reproduzível", () => {
     expect(source("install.mjs")).toContain('["ci", "--no-audit", "--no-fund"]');
     const cli = source("packages/cli/bin/funnel-zero.mjs");
     expect(cli).toContain("KRANO_RESULT_JSON:");
-    expect(cli).toContain('const APP_VERSION = "0.4.7"');
+    expect(cli).toContain('const APP_VERSION = "0.4.8"');
     expect(cli).toContain('!["whoami", "login", "logout"].includes(commandName)');
     expect(cli).toContain("copyFileSync(configExamplePath, configPath)");
+    expect(cli).toContain('args.has("--enable-r2")');
+    expect(cli).toContain("delete config.r2_buckets");
+    expect(cli).toContain('MEDIA_ENABLED: enableR2 ? "true" : "false"');
     expect(readFileSync(resolve(root, "scripts/uninstall.mjs"), "utf8")).toContain(
       '["delete", installation.worker.name, "--force"]'
     );

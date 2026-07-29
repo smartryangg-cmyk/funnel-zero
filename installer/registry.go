@@ -26,21 +26,23 @@ type installationManifest struct {
 		ID   string `json:"id"`
 	} `json:"d1"`
 	R2 struct {
+		Enabled      bool   `json:"enabled"`
 		Name         string `json:"name"`
 		StorageClass string `json:"storageClass"`
 	} `json:"r2"`
 }
 
 type desktopInstallation struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Path        string `json:"path"`
-	Profile     string `json:"profile,omitempty"`
-	AccountID   string `json:"accountId,omitempty"`
-	WorkerURL   string `json:"workerUrl,omitempty"`
-	Version     string `json:"version,omitempty"`
-	InstalledAt string `json:"installedAt,omitempty"`
-	Status      string `json:"status"`
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	Path         string `json:"path"`
+	Profile      string `json:"profile,omitempty"`
+	AccountID    string `json:"accountId,omitempty"`
+	WorkerURL    string `json:"workerUrl,omitempty"`
+	Version      string `json:"version,omitempty"`
+	InstalledAt  string `json:"installedAt,omitempty"`
+	MediaEnabled bool   `json:"mediaEnabled"`
+	Status       string `json:"status"`
 }
 
 type desktopProfile struct {
@@ -129,6 +131,7 @@ func discoverInstallation(target, profile string) desktopInstallation {
 	item.WorkerURL = strings.TrimRight(manifest.Worker.URL, "/")
 	item.Version = manifest.AppVersion
 	item.InstalledAt = manifest.InstalledAt
+	item.MediaEnabled = manifest.R2.Enabled || manifest.R2.Name != ""
 	item.Status = "installed"
 	return item
 }

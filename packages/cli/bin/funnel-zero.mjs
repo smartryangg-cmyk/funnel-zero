@@ -18,7 +18,7 @@ const configExamplePath = join(projectRoot, "wrangler.example.jsonc");
 const wranglerBin = join(projectRoot, "node_modules", "wrangler", "bin", "wrangler.js");
 const isWindows = process.platform === "win32";
 const npmCommand = isWindows ? "npm.cmd" : "npm";
-const APP_VERSION = "0.4.7";
+const APP_VERSION = "0.4.8";
 const RESULT_PREFIX = "KRANO_RESULT_JSON:";
 const REQUIRED_WRANGLER_SCOPES = [
   "account:read",
@@ -222,7 +222,7 @@ function authorizeCloudflare() {
   info("Conectar KRANO à Cloudflare");
   line("Uma página segura da Cloudflare será aberta para você escolher a conta e autorizar:");
   line("  • publicar e atualizar a KRANO;");
-  line("  • criar o banco D1 e a biblioteca R2;");
+  line("  • criar o banco D1 e, somente se solicitado, a biblioteca R2 para VSL;");
   line("  • configurar os domínios que você escolher.");
   line();
   runWrangler(
@@ -285,7 +285,7 @@ function parseAccountsTable(value) {
   return [...new Map(rows.map((account) => [account.id, account])).values()];
 }
 
-async function ensureInfrastructure({ accountId, workerName, databaseName, bucketName, created }) {
+async function ensureInfrastructure({ accountId, workerName, databaseName, bucketName, enableR2, created }) {
   const databases = parseD1List(accountId);
   let database = databases.find((item) => item.name === databaseName);
   if (!database) {
@@ -298,16 +298,18 @@ async function ensureInfrastructure({ accountId, workerName, databaseName, bucke
     ok(`D1 reutilizado: ${databaseName}`);
   }
 
-  const buckets = parseR2Names(accountId);
-  if (!buckets.includes(bucketName)) {
-    info(`Criando R2 Standard ${bucketName}`);
-    runWrangler(
-      ["r2", "bucket", "create", bucketName, "--location", "enam", "--storage-class", "Standard"],
-      { accountId, quiet: true }
-    );
-    created.bucket = true;
-  } else {
-    ok(`R2 reutilizado: ${bucketName}`);
+  if (enableR2) {
+    const buckets = parseR2Names(accountId);
+    if (!buckets.includes(bucketName)) {
+      info(`Criando R2 Standard ${bucketName}`);
+      runWrangler(
+        ["r2", "bucket", "create", bucketName, "--location", "enam", "--storage-class", "Standard"],
+        { accountId, quiet: true }
+      );
+      created.bucket = true;
+    } else {
+      ok(`R2 reutilizado: ${bucketName}`);
+    }
   }
 
   const config = readConfig();
@@ -315,7 +317,8 @@ async function ensureInfrastructure({ accountId, workerName, databaseName, bucke
   config.vars = {
     ...config.vars,
     WORKER_NAME: workerName,
-    CLOUDFLARE_ACCOUNT_ID: accountId
+    CLOUDFLARE_ACCOUNT_ID: accountId,
+    MEDIA_ENABLED: enableR2 ? "true" : "false"
   };
   config.d1_databases = [
     {
@@ -325,7 +328,11 @@ async function ensureInfrastructure({ accountId, workerName, databaseName, bucke
       migrations_dir: "./migrations"
     }
   ];
-  config.r2_buckets = [{ binding: "MEDIA", bucket_name: bucketName }];
+  if (enableR2) {
+    config.r2_buckets = [{ binding: "MEDIA", bucket_name: bucketName }];
+  } else {
+    delete config.r2_buckets;
+  }
   saveConfig(config);
   return database.uuid;
 }
@@ -522,11 +529,15 @@ async function setup() {
   const workerName = installationName;
   const databaseName = `${installationName}-db`;
   const bucketName = `${installationName}-media`;
+  const enableR2 =
+    args.has("--enable-r2")
+    || previous?.r2?.enabled === true
+    || (previous?.r2?.enabled === undefined && Boolean(previous?.r2?.name));
 
   line();
   line(`Worker: ${workerName}`);
   line(`D1:     ${databaseName}`);
-  line(`R2:     ${bucketName} (Standard)`);
+  line(`Vídeos: ${enableR2 ? `${bucketName} (R2 Standard)` : "não ativado (opcional)"}`);
   line("Modo:   FREE_ONLY=true");
   if (!(await confirm("Criar ou reutilizar esta infraestrutura?", true))) {
     line("Instalação cancelada sem alterações.");
@@ -544,6 +555,7 @@ async function setup() {
       workerName,
       databaseName,
       bucketName,
+      enableR2,
       created
     });
 
@@ -603,7 +615,11 @@ async function setup() {
       accountId,
       worker: { name: workerName, url: deploymentUrl },
       d1: { name: databaseName, id: databaseId },
-      r2: { name: bucketName, storageClass: "Standard" },
+      r2: {
+        enabled: enableR2,
+        name: enableR2 ? bucketName : "",
+        storageClass: "Standard"
+      },
       freeOnly: true,
       installedAt: new Date().toISOString()
     };
@@ -616,7 +632,7 @@ async function setup() {
     line();
     ok("Worker");
     ok("Banco D1");
-    ok("Bucket R2 Standard");
+    if (enableR2) ok("Hospedagem de VSL no R2");
     ok("Migrations");
     ok("Segredos");
     ok("Aplicação");
