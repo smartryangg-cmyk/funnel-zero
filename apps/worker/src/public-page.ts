@@ -14,9 +14,9 @@ interface PublicPageRow {
   page_slug: string;
   page_type: string;
   funnel_id: string | null;
-  offer_id: string;
-  offer_name: string;
-  offer_slug: string;
+  offer_id: string | null;
+  offer_name: string | null;
+  offer_slug: string | null;
   checkout_url: string | null;
   pixel_config_json: string;
   content_json: string;
@@ -631,6 +631,21 @@ async function readPublicPage(
   ).bind(offerSlug).first<PublicPageRow>();
 }
 
+async function readStandalonePage(env: Env, pageSlug: string): Promise<PublicPageRow | null> {
+  return env.DB.prepare(
+    `SELECT p.id AS page_id, p.name AS page_name, p.slug AS page_slug,
+      p.page_type, p.funnel_id, o.id AS offer_id, o.name AS offer_name, o.slug AS offer_slug,
+      o.checkout_url, COALESCE(o.pixel_config_json, '{}') AS pixel_config_json, v.content_json
+     FROM pages p
+     LEFT JOIN offers o ON o.id = p.offer_id
+     JOIN page_versions v ON v.id = p.published_version_id
+     LEFT JOIN funnels f ON f.id = p.funnel_id
+     WHERE p.slug = ? AND p.offer_id IS NULL AND p.status = 'published'
+       AND (f.id IS NULL OR f.status = 'published')
+     ORDER BY p.updated_at DESC LIMIT 1`
+  ).bind(pageSlug).first<PublicPageRow>();
+}
+
 async function chooseVariant(
   env: Env,
   page: PublicPageRow,
@@ -685,9 +700,14 @@ export async function servePublicPage(
   url: URL
 ): Promise<Response> {
   const parts = url.pathname.split("/").filter(Boolean);
-  const offerSlug = decodeURIComponent(parts[1] ?? "");
-  const pageSlug = parts[2] ? decodeURIComponent(parts[2]) : null;
-  const page = await readPublicPage(env, offerSlug, pageSlug);
+  const standalone = parts[0] === "s";
+  const offerSlug = standalone ? "" : decodeURIComponent(parts[1] ?? "");
+  const pageSlug = standalone
+    ? decodeURIComponent(parts[1] ?? "")
+    : parts[2] ? decodeURIComponent(parts[2]) : null;
+  const page = standalone
+    ? await readStandalonePage(env, pageSlug ?? "")
+    : await readPublicPage(env, offerSlug, pageSlug);
   if (!page) {
     return new Response(
       `<!doctype html><html lang="pt-BR"><meta charset="utf-8"><title>Página não encontrada</title>
@@ -721,7 +741,7 @@ export async function servePublicPage(
   const pixels = safeJson<Record<string, unknown>>(page.pixel_config_json, {});
   const title = content.settings?.title ?? page.page_name;
   const description =
-    content.settings?.description ?? `${page.offer_name} — página publicada na KRANO.`;
+    content.settings?.description ?? `${page.offer_name ?? page.page_name} — página publicada na KRANO.`;
   const playerProfiles = await readPlayerProfiles(env, content);
   const blocks = content.blocks
     .map((block) => renderBlock(block, page, pitchAtSeconds, playerProfiles))

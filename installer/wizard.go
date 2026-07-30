@@ -60,6 +60,10 @@ type vaultRequest struct {
 	Confirmation string `json:"confirmation"`
 }
 
+type assistantRequest struct {
+	Message string `json:"message"`
+}
+
 type wizardServer struct {
 	mu        sync.RWMutex
 	state     wizardState
@@ -103,6 +107,9 @@ func runWizard(target, branch string, args []string) error {
 	mux.HandleFunc("/api/install", wizard.installRequest)
 	mux.HandleFunc("/api/connect", wizard.connectRequest)
 	mux.HandleFunc("/api/cloudflare/open", wizard.openCloudflareRequest)
+	mux.HandleFunc("/api/openai/status", wizard.openAIStatusRequest)
+	mux.HandleFunc("/api/openai/connect", wizard.openAIConnectRequest)
+	mux.HandleFunc("/api/assistant/message", wizard.assistantMessageRequest)
 	mux.HandleFunc("/api/open", wizard.openRequest)
 	mux.HandleFunc("/api/recover", wizard.recoverRequest)
 	mux.HandleFunc("/api/remove", wizard.removeRequest)
@@ -265,6 +272,133 @@ func (wizard *wizardServer) openCloudflareRequest(response http.ResponseWriter, 
 		return
 	}
 	writeWizardJSON(response, map[string]bool{"ok": true})
+}
+
+func codexCommand(target string, prepare bool) (string, []string, error) {
+	if path, err := exec.LookPath("codex"); err == nil &&
+		!strings.Contains(strings.ToLower(path), `\windowsapps\`) {
+		return path, nil, nil
+	}
+	if runtime.GOOS == "windows" {
+		if path, err := exec.LookPath("npx.cmd"); err == nil {
+			return path, []string{"-y", "@openai/codex"}, nil
+		}
+	}
+	if path, err := exec.LookPath("npx"); err == nil {
+		return path, []string{"-y", "@openai/codex"}, nil
+	}
+	if prepare {
+		nodePath, err := ensureNode(target)
+		if err == nil {
+			npx := filepath.Join(filepath.Dir(nodePath), "npx")
+			if runtime.GOOS == "windows" {
+				npx += ".cmd"
+			}
+			if _, statErr := os.Stat(npx); statErr == nil {
+				return npx, []string{"-y", "@openai/codex"}, nil
+			}
+		}
+	}
+	return "", nil, errors.New("Codex não encontrado. Instale o Codex ou o Node.js e tente novamente")
+}
+
+func (wizard *wizardServer) openAIStatusRequest(response http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodGet || !wizard.authorized(request) {
+		http.NotFound(response, request)
+		return
+	}
+	commandName, prefix, err := codexCommand(wizard.target, false)
+	if err != nil {
+		writeWizardJSON(response, map[string]any{"available": false, "connected": false, "message": err.Error()})
+		return
+	}
+	command := exec.Command(commandName, append(prefix, "login", "status")...)
+	output, runErr := command.CombinedOutput()
+	message := strings.TrimSpace(string(output))
+	connected := runErr == nil && !strings.Contains(strings.ToLower(message), "not logged")
+	writeWizardJSON(response, map[string]any{
+		"available": true, "connected": connected, "message": message,
+	})
+}
+
+func (wizard *wizardServer) openAIConnectRequest(response http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost || !wizard.authorized(request) {
+		http.NotFound(response, request)
+		return
+	}
+	commandName, prefix, err := codexCommand(wizard.target, true)
+	if err != nil {
+		http.Error(response, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	command := exec.Command(commandName, append(prefix, "login")...)
+	command.Dir = wizard.target
+	command.Stdout, command.Stderr = os.Stdout, os.Stderr
+	if err := command.Start(); err != nil {
+		http.Error(response, "Não foi possível abrir a autorização da OpenAI.", http.StatusInternalServerError)
+		return
+	}
+	go func() { _ = command.Wait() }()
+	writeWizardJSON(response, map[string]bool{"ok": true})
+}
+
+func (wizard *wizardServer) assistantMessageRequest(response http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost || !wizard.authorized(request) {
+		http.NotFound(response, request)
+		return
+	}
+	var input assistantRequest
+	if err := json.NewDecoder(io.LimitReader(request.Body, 32_000)).Decode(&input); err != nil {
+		http.Error(response, "Mensagem inválida.", http.StatusBadRequest)
+		return
+	}
+	input.Message = strings.TrimSpace(input.Message)
+	if input.Message == "" || len(input.Message) > 8_000 {
+		http.Error(response, "Escreva uma mensagem de até 8.000 caracteres.", http.StatusBadRequest)
+		return
+	}
+	commandName, prefix, err := codexCommand(wizard.target, true)
+	if err != nil {
+		http.Error(response, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	if err := os.MkdirAll(wizard.target, 0o755); err != nil {
+		http.Error(response, "Não foi possível preparar a pasta da estrutura.", http.StatusInternalServerError)
+		return
+	}
+	systemContext := `Você é o Assistente KRANO. Trabalhe apenas nesta estrutura KRANO.
+O produto contém somente hospedagem de sites estáticos, hospedagem de vídeos, domínios/subdomínios e este assistente.
+Explique pouco e execute o que for seguro. Antes de apagar recursos, publicar externamente, gerar custo ou alterar contas, peça confirmação explícita.
+Ao clonar uma página, preserve a experiência e o conteúdo permitido, crie uma implementação original quando houver marca ou identidade protegida e valide desktop e celular.
+Pedido do usuário: ` + input.Message
+	args := append(prefix, "exec", "--json", "--sandbox", "workspace-write", "-C", wizard.target, systemContext)
+	command := exec.Command(commandName, args...)
+	output, runErr := command.CombinedOutput()
+	answer := ""
+	for _, line := range strings.Split(string(output), "\n") {
+		var event struct {
+			Type string `json:"type"`
+			Item struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"item"`
+		}
+		if json.Unmarshal([]byte(line), &event) == nil &&
+			event.Type == "item.completed" && event.Item.Type == "agent_message" {
+			answer = event.Item.Text
+		}
+	}
+	if answer == "" {
+		answer = strings.TrimSpace(string(output))
+	}
+	if runErr != nil {
+		if answer == "" {
+			answer = "O Codex não conseguiu concluir esta tarefa."
+		}
+		writeWizardJSON(response, map[string]any{"ok": false, "message": answer})
+		return
+	}
+	writeWizardJSON(response, map[string]any{"ok": true, "message": answer})
 }
 
 func (wizard *wizardServer) openRequest(response http.ResponseWriter, request *http.Request) {
@@ -890,20 +1024,22 @@ dialog{width:min(520px,calc(100% - 30px));border:1px solid var(--line);border-ra
 label{display:block;margin:14px 0 6px;font-size:12px;font-weight:700}input,select{width:100%;padding:11px;border:1px solid var(--line);border-radius:9px;background:var(--soft);color:var(--text)}.check{display:flex;gap:9px;align-items:center}.check input{width:auto}
 .theme-options{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:16px}.theme-options button{padding:15px;text-align:left}.theme-options button.active{background:var(--accent);color:var(--on);border-color:var(--accent)}.theme-options small{display:block;margin-top:4px;color:var(--muted)}.theme-options button.active small{color:inherit;opacity:.72}
 .connect-progress{display:grid;justify-items:center;gap:8px;padding:24px 8px;text-align:center}.connect-progress[hidden]{display:none}.connect-progress strong{font-size:16px}.spinner{width:34px;height:34px;margin-bottom:5px;border:3px solid var(--line);border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
+.assistant-box{display:grid;height:calc(100vh - 150px);min-height:520px;padding:0}.assistant-head{display:flex;align-items:center;gap:12px;padding:16px 18px;border-bottom:1px solid var(--line)}.assistant-head>span{display:grid;width:36px;height:36px;place-items:center;border-radius:10px;background:#2563eb;color:#fff}.assistant-head button{margin-left:auto}.chat{min-height:0;padding:20px;overflow:auto}.chat-empty{display:grid;height:100%;place-content:center;justify-items:center;gap:18px}.suggestions{display:grid;grid-template-columns:1fr 1fr;gap:8px;width:min(620px,100%)}.suggestions button{text-align:left}.message{max-width:720px;margin:0 0 10px;padding:12px 14px;border:1px solid var(--line);border-radius:11px;white-space:pre-wrap;line-height:1.55}.message.user{margin-left:auto;background:#2563eb;color:#fff}.composer{display:flex;gap:9px;padding:14px;border-top:1px solid var(--line)}.composer textarea{flex:1;resize:none;padding:12px;border:1px solid var(--line);border-radius:10px;background:var(--soft);color:var(--text);font:inherit}
 @media(max-width:850px){.app{grid-template-columns:1fr}aside{position:static;height:auto;border-right:0;border-bottom:1px solid var(--line)}nav{display:flex;margin:18px 0 0;overflow:auto}.aside-foot{display:none}main{padding:20px}.half,.third{grid-column:span 12}.hero{grid-template-columns:1fr}.structure{grid-template-columns:1fr}}
 </style></head><body><div class="app">
 <aside><div class="brand"><b>K</b>KRANO</div><nav>
-<button class="active" data-view="home">Visão geral</button><button data-view="structures">Estruturas</button><button data-view="accounts">Contas Cloudflare</button><button data-view="vault">Cofre local</button><button data-view="settings">Configurações</button>
+<button class="active" data-view="home">Visão geral</button><button data-view="assistant">Assistente IA</button><button data-view="structures">Estruturas</button><button data-view="accounts">Contas Cloudflare</button><button data-view="vault">Cofre local</button><button data-view="settings">Configurações</button>
 </nav><div class="aside-foot">KRANO Desktop {{.Version}}<br>Seus dados ficam na sua Cloudflare.<br><button id="exit" style="margin-top:12px">Encerrar app</button></div></aside>
 <main><div id="status" class="status"><div class="row" style="justify-content:space-between"><strong id="status-title"></strong><span id="status-step"></span></div><p id="status-message"></p><div id="status-error"></div><div class="progress"><i id="status-progress"></i></div></div>
-<section class="view active" id="home"><div class="top"><div><h1>Olá, vamos construir.</h1><p>Uma central local para criar, manter e remover toda a sua estrutura KRANO.</p></div></div>
-<div class="grid"><article class="card hero"><div><span class="pill"><i class="dot"></i>APP LOCAL E PERMANENTE</span><h2 style="margin-top:14px">Teste ofertas sem custo inicial de ferramenta.</h2><p>Site, funil, vídeo, tracking e dashboard ficam na sua própria conta Cloudflare. Você mantém o controle e acompanha os limites gratuitos.</p></div><div class="row"><button class="primary" data-new>Nova estrutura</button><button data-guide>Ver tutorial</button></div></article>
+<section class="view active" id="home"><div class="top"><div><h1>Sua hospedagem KRANO.</h1><p>Sites, vídeos e domínios na sua própria Cloudflare.</p></div></div>
+<div class="grid"><article class="card hero"><div><span class="pill"><i class="dot"></i>APP LOCAL E PERMANENTE</span><h2 style="margin-top:14px">Tudo simples para começar.</h2><p>O app instala, atualiza, abre e remove sua estrutura. O assistente pode executar tarefas com sua aprovação.</p></div><div class="row"><button class="primary" data-new>Nova estrutura</button><button data-guide>Ver tutorial</button></div></article>
 <article class="card half"><h2>Suas estruturas</h2><p id="summary">Carregando...</p><div id="home-structures" class="structures"></div></article>
 <article class="card half"><h2>Faixa gratuita Cloudflare</h2><div class="usage" style="margin-top:15px"><div><div class="meter-head"><span>Workers</span><b>100 mil requisições/dia</b></div><div class="meter"><i></i></div></div><div><div class="meter-head"><span>R2 para VSL</span><b>módulo opcional</b></div><div class="meter"><i></i></div></div><div><div class="meter-head"><span>D1</span><b>5 GB total</b></div><div class="meter"><i></i></div></div><p class="note">A estrutura básica não exige R2. Ative a hospedagem de vídeos somente quando precisar.</p></div></article></div></section>
+<section class="view" id="assistant"><div class="top"><div><h1>Assistente IA</h1><p>Conecte sua conta OpenAI e peça em linguagem simples.</p></div></div><article class="card assistant-box"><div class="assistant-head"><span>✦</span><div><strong>Codex na KRANO</strong><p id="openai-state">Verificando conexão...</p></div><button class="primary" id="openai-connect">Conectar OpenAI</button></div><div class="chat" id="assistant-chat"><div class="chat-empty"><h2>O que você quer fazer?</h2><div class="suggestions"><button>Clone esta página: https://...</button><button>Publique meu site</button><button>Configure meu domínio</button><button>Corrija um erro da estrutura</button></div></div></div><form class="composer" id="assistant-form"><textarea id="assistant-input" rows="2" placeholder="Escreva seu pedido..."></textarea><button class="primary">Enviar</button></form></article></section>
 <section class="view" id="structures"><div class="top"><div><h1>Estruturas</h1><p>Instale, atualize, abra, recupere ou remova cada ambiente.</p></div><button class="primary" data-new>Nova estrutura</button></div><div class="card"><div id="all-structures" class="structures"></div></div></section>
 <section class="view" id="accounts"><div class="top"><div><h1>Contas Cloudflare</h1><p>Perfis OAuth separados evitam publicar uma estrutura na conta errada.</p></div><div class="row"><button id="open-cloudflare">Abrir painel Cloudflare</button><button class="primary" id="connect">Conectar conta</button></div></div><div class="grid"><article class="card half"><h2>Como funciona</h2><div class="steps"><div class="step"><b>1</b><div><strong>Dê um apelido</strong><p>Ex.: pessoal, cliente-a ou testes.</p></div></div><div class="step"><b>2</b><div><strong>Autorize no navegador</strong><p>A tela é oficial da Cloudflare; a KRANO não guarda sua senha.</p></div></div><div class="step"><b>3</b><div><strong>Escolha ao instalar</strong><p>Cada pasta fica vinculada ao perfil correto.</p></div></div></div></article><article class="card half"><h2>Contas conectadas</h2><p>Acesso direto abre o painel oficial; a Cloudflare pode pedir que você escolha a conta.</p><div id="profiles" class="structures"></div></article></div></section>
 <section class="view" id="vault"><div class="top"><div><h1>Cofre local</h1><p>Guarde voluntariamente o login do painel para recuperar quando esquecer.</p></div></div><div class="grid"><article class="card"><h2>Protegido pelo Windows</h2><p>Login, senha e recuperação são criptografados para a sua conta atual do Windows. Nada é enviado à KRANO, Cloudflare ou Meta.</p><div class="note" style="margin-top:14px">Quem tiver acesso desbloqueado à sua conta do Windows poderá revelar estas credenciais. Use também PIN ou senha no Windows.</div></article><article class="card"><div id="vault-list" class="structures"></div></article></div></section>
-<section class="view" id="settings"><div class="top"><div><h1>Configurações</h1><p>Aparência e ajuda opcional em um só lugar.</p></div></div><div class="grid"><article class="card half"><h2>Aparência</h2><p>Escolha o tema. A preferência fica salva somente neste computador.</p><div class="theme-options"><button id="theme-dark" type="button"><strong>Escuro</strong><small>Menos brilho</small></button><button id="theme-light" type="button"><strong>Claro</strong><small>Mais contraste</small></button></div></article><article class="card half"><h2>Ajuda para iniciantes</h2><p>As explicações são opcionais e podem ser ocultadas quando você já conhecer o fluxo.</p><label class="check"><input id="tutorial-toggle" type="checkbox"> Mostrar tutoriais e dicas</label></article><article class="card third tutorial-card"><h2>Primeira estrutura</h2><p>Conecte a Cloudflare, escolha um nome e publique Worker + D1. O R2 fica separado.</p></article><article class="card third tutorial-card"><h2>Hospedagem de vídeo</h2><p>Os arquivos vão para o R2 Standard. O player otimizado é administrado no painel KRANO.</p></article><article class="card third tutorial-card"><h2>Meta Ads</h2><p>Depois do primeiro acesso, conecte a Meta dentro do painel para campanhas, pixels e tracking.</p></article><article class="card tutorial-card"><h2>Custos e cartão</h2><p>A KRANO trabalha em modo FREE_ONLY. O R2 tem franquia gratuita, mas a Cloudflare pode solicitar uma forma de pagamento ao ativar o produto. O app não recebe nem armazena dados de cartão.</p></article></div></section>
+<section class="view" id="settings"><div class="top"><div><h1>Configurações</h1><p>Aparência e ajuda opcional.</p></div></div><div class="grid"><article class="card half"><h2>Aparência</h2><p>Escolha o tema. A preferência fica salva neste computador.</p><div class="theme-options"><button id="theme-dark" type="button"><strong>Escuro</strong><small>Menos brilho</small></button><button id="theme-light" type="button"><strong>Claro</strong><small>Mais contraste</small></button></div></article><article class="card half"><h2>Ajuda para iniciantes</h2><p>As explicações são opcionais.</p><label class="check"><input id="tutorial-toggle" type="checkbox"> Mostrar tutoriais e dicas</label></article><article class="card third tutorial-card"><h2>Primeira estrutura</h2><p>Conecte a Cloudflare, escolha um nome e publique Worker + D1.</p></article><article class="card third tutorial-card"><h2>Hospedagem de vídeo</h2><p>Ative o R2 somente quando quiser hospedar vídeos.</p></article><article class="card third tutorial-card"><h2>Assistente</h2><p>Conecte a OpenAI e peça ao Codex para executar tarefas.</p></article></div></section>
 </main></div>
 <dialog id="new-dialog"><form class="modal" method="dialog"><h2>Nova estrutura</h2><p>Use um nome curto e selecione uma conta Cloudflare já conectada.</p><label>Nome da estrutura</label><input id="new-name" placeholder="minha-oferta"><label>Conta Cloudflare</label><select id="new-profile"></select><label class="check"><input id="new-enable-r2" type="checkbox"> Ativar hospedagem de VSL no R2</label><p class="note" style="margin-top:10px">Opcional. A Cloudflare pode solicitar a ativação do R2 e uma forma de pagamento. Sites, funis, tracking e dashboard funcionam sem isso.</p><footer><button value="cancel">Cancelar</button><button class="primary" id="install-new" value="default">Instalar estrutura</button></footer></form></dialog>
 <dialog id="connect-dialog"><form class="modal" method="dialog"><h2>Conectar Cloudflare</h2><div id="connect-fields"><p>Será aberta a autorização oficial. Você pode manter vários logins organizados.</p><label>Apelido do perfil</label><input id="profile-name" placeholder="pessoal"></div><div id="connect-progress" class="connect-progress" aria-live="polite" hidden><i class="spinner" aria-hidden="true"></i><strong id="connect-progress-title">Preparando conexão</strong><p id="connect-progress-message">Aguarde um instante.</p></div><footer><button id="connect-cancel" value="cancel">Cancelar</button><button class="primary" id="connect-go" value="default">Abrir autorização</button></footer></form></dialog>
@@ -930,7 +1066,13 @@ function poll(){state().then(()=>{if(current.status==="running")setTimeout(poll,
 document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{document.querySelectorAll("nav button,.view").forEach(x=>x.classList.remove("active"));b.classList.add("active");$("#"+b.dataset.view).classList.add("active")});document.querySelectorAll("[data-new]").forEach(b=>b.onclick=()=>{if(!(current?.profiles||[]).length){document.querySelector('[data-view="accounts"]').click();setConnectPending(false);$("#connect-dialog").showModal();return}$("#new-dialog").showModal()});document.querySelectorAll("[data-guide]").forEach(b=>b.onclick=()=>document.querySelector('[data-view="settings"]').click());
 $("#open-cloudflare").onclick=()=>api("/api/cloudflare/open").catch(showError);$("#connect").onclick=()=>{setConnectPending(false);$("#connect-dialog").showModal()};$("#install-new").onclick=e=>{e.preventDefault();api("/api/install",{name:$("#new-name").value,profile:$("#new-profile").value,enableR2:$("#new-enable-r2").checked}).then(()=>{$("#new-dialog").close();$("#new-enable-r2").checked=false;poll()}).catch(showError)};$("#connect-go").onclick=e=>{e.preventDefault();const profile=$("#profile-name").value.trim();if(!profile){showError(new Error("Informe um apelido para a conta."));return}openedAuthorizationURL="";authWindow=window.open("about:blank","krano-cloudflare-auth");try{if(authWindow){authWindow.document.title="Conectando Cloudflare";authWindow.document.body.innerHTML='<main style="font:16px system-ui;padding:40px;color:#222"><h1>Preparando Cloudflare…</h1><p>Esta página será redirecionada para a autorização oficial.</p></main>'}}catch{}setConnectPending(true,"Preparando conexão","A KRANO está preparando a autorização oficial.");api("/api/connect",{profile,managedBrowser:Boolean(authWindow)}).then(poll).catch(error=>{closeAuthorizationWindow();setConnectPending(false);showError(error)})};$("#remove-go").onclick=e=>{e.preventDefault();api("/api/remove",{id:removeId,confirmation:$("#remove-confirm").value,preserveD1:$("#preserve-d1").checked,preserveR2:$("#preserve-r2").checked,removeLocal:$("#remove-local").checked}).then(()=>{$("#remove-dialog").close();poll()}).catch(showError)};$("#tutorial-toggle").onchange=e=>api("/api/tutorial",{enabled:e.target.checked}).catch(showError);
 $("#vault-reveal").onclick=()=>{const show=$("#vault-password").type==="password";$("#vault-password").type=show?"text":"password";$("#vault-reveal").textContent=show?"Ocultar":"Mostrar"};$("#vault-copy").onclick=()=>navigator.clipboard.writeText($("#vault-password").value).then(()=>{$("#vault-copy").textContent="Copiada";setTimeout(()=>$("#vault-copy").textContent="Copiar",1200)}).catch(showError);$("#vault-save").onclick=e=>{e.preventDefault();api("/api/vault/save",{id:vaultId,login:$("#vault-login").value,password:$("#vault-password").value,recovery:$("#vault-recovery").value}).then(()=>{$("#vault-dialog").close();state()}).catch(showError)};$("#vault-delete").onclick=()=>{if(!confirm("Apagar esta credencial do cofre local?"))return;api("/api/vault/delete",{id:vaultId,confirmation:"APAGAR CREDENCIAL"}).then(()=>{$("#vault-dialog").close();state()}).catch(showError)};
+async function openAIStatus(){const r=await fetch("/api/openai/status?token="+encodeURIComponent(token),{headers});const s=await r.json();$("#openai-state").textContent=s.connected?"Conta OpenAI conectada":s.message||"Conecte para usar o assistente";$("#openai-connect").textContent=s.connected?"Reconectar":"Conectar OpenAI"}
+function addMessage(role,text){const chat=$("#assistant-chat");if(chat.querySelector(".chat-empty"))chat.innerHTML="";const item=document.createElement("div");item.className="message "+role;item.textContent=text;chat.appendChild(item);chat.scrollTop=chat.scrollHeight;return item}
+document.querySelectorAll(".suggestions button").forEach(b=>b.onclick=()=>{$("#assistant-input").value=b.textContent;$("#assistant-input").focus()});
+$("#openai-connect").onclick=()=>api("/api/openai/connect").then(()=>{$("#openai-state").textContent="Autorize na janela da OpenAI...";setTimeout(openAIStatus,4000)}).catch(showError);
+$("#assistant-form").onsubmit=e=>{e.preventDefault();const message=$("#assistant-input").value.trim();if(!message)return;addMessage("user",message);$("#assistant-input").value="";const pending=addMessage("assistant","Executando com segurança...");$("#assistant-form").querySelector("button").disabled=true;api("/api/assistant/message",{message}).then(result=>{pending.textContent=result.message||"Concluído.";openAIStatus()}).catch(error=>pending.textContent=error.message).finally(()=>$("#assistant-form").querySelector("button").disabled=false)};
 $("#theme-dark").onclick=()=>applyTheme("dark");$("#theme-light").onclick=()=>applyTheme("light");state();
+openAIStatus().catch(()=>{$("#openai-state").textContent="Não foi possível verificar o Codex"});
 $("#onboarding-start").onclick=e=>{e.preventDefault();api("/api/onboarding",{enabled:$("#onboarding-tutorial").checked}).then(()=>{$("#onboarding-dialog").close();state()}).catch(showError)};
 $("#exit").onclick=()=>api("/api/exit").then(()=>{document.body.innerHTML='<main style="padding:40px"><h1>KRANO encerrada</h1><p>Você pode fechar esta aba.</p></main>'}).catch(showError);
 </script></body></html>`))

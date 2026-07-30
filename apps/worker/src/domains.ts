@@ -19,6 +19,8 @@ interface DomainRow {
   id: string;
   funnel_id: string | null;
   funnel_name: string | null;
+  site_id: string | null;
+  site_name: string | null;
   hostname: string;
   status: "pending" | "validating" | "active" | "failed";
   is_primary: number;
@@ -46,6 +48,7 @@ interface DomainRouteRow {
   domain_id: string;
   offer_slug: string | null;
   page_slug: string | null;
+  standalone: number;
 }
 
 function cloudflareDomainError(error: CloudflareApiError): Response {
@@ -94,8 +97,13 @@ function normalizeHostname(value: string): string {
 
 async function readDomains(env: Env) {
   const result = await env.DB.prepare(
-    `SELECT d.*, f.name AS funnel_name FROM domains d
-     LEFT JOIN funnels f ON f.id = d.funnel_id ORDER BY d.created_at DESC`
+    `SELECT d.*, f.name AS funnel_name,
+       json_extract(d.provider_config_json, '$.pageId') AS site_id,
+       p.name AS site_name
+     FROM domains d
+     LEFT JOIN funnels f ON f.id = d.funnel_id
+     LEFT JOIN pages p ON p.id = json_extract(d.provider_config_json, '$.pageId')
+     ORDER BY d.created_at DESC`
   ).all<DomainRow>();
   return {
     provider: await providerStatus(env),
@@ -104,6 +112,8 @@ async function readDomains(env: Env) {
       id: row.id,
       funnelId: row.funnel_id,
       funnelName: row.funnel_name,
+      siteId: row.site_id,
+      siteName: row.site_name,
       hostname: row.hostname,
       status: row.status,
       isPrimary: Boolean(row.is_primary),
@@ -217,7 +227,7 @@ async function attachDomain(
 ): Promise<Response> {
   const body = parseBodyRecord(await readJson(request, 32_000));
   const hostname = normalizeHostname(requiredString(body.hostname, "Domínio", 253));
-  const funnelId = requiredString(body.funnelId, "Funil", 100);
+  const siteId = requiredString(body.siteId, "Site", 100);
   const existing = await env.DB.prepare(
     "SELECT id, status FROM domains WHERE hostname = ? LIMIT 1"
   )
@@ -226,25 +236,15 @@ async function attachDomain(
   if (existing && existing.status !== "failed") {
     throw new ValidationError("Esse endereço já está publicado na KRANO.");
   }
-  const funnel = await env.DB.prepare(
-    `SELECT f.id
-     FROM funnels f
-     JOIN pages p
-       ON p.funnel_id = f.id
-      AND p.status = 'published'
-      AND p.published_version_id IS NOT NULL
-     JOIN offers o
-       ON o.id = p.offer_id
-      AND o.status = 'active'
-     WHERE f.id = ? AND f.status = 'published'
+  const site = await env.DB.prepare(
+    `SELECT id FROM pages
+     WHERE id = ? AND status = 'published' AND published_version_id IS NOT NULL
      LIMIT 1`
   )
-    .bind(funnelId)
+    .bind(siteId)
     .first<{ id: string }>();
-  if (!funnel) {
-    throw new ValidationError(
-      "Publique o funil e pelo menos uma página dele antes de conectar o domínio."
-    );
+  if (!site) {
+    throw new ValidationError("Publique o site antes de conectar o domínio.");
   }
   const provider = await providerConfig(env);
   if (!provider.connected || !provider.accountId) {
@@ -298,7 +298,7 @@ async function attachDomain(
          updated_at = datetime('now')`
     ).bind(
       id,
-      funnelId,
+      null,
       hostname,
       domainStatus,
       body.isPrimary === true ? 1 : 0,
@@ -306,7 +306,8 @@ async function attachDomain(
         domainId: attached.id,
         zoneId: zone.id,
         zoneName: zone.name,
-        certIssued: Boolean(attached.cert_id)
+        certIssued: Boolean(attached.cert_id),
+        pageId: siteId
       })
     ),
     audit(env, user.id, "domain.attached", "domain", id, { hostname })
@@ -400,12 +401,13 @@ export async function resolveCustomDomainUrl(
         ? url.pathname.slice(1).replace(/\/$/, "")
         : "__unmatched__";
   const row = await env.DB.prepare(
-    `SELECT d.id AS domain_id, o.slug AS offer_slug, p.slug AS page_slug
+    `SELECT d.id AS domain_id, o.slug AS offer_slug, p.slug AS page_slug,
+       CASE WHEN p.offer_id IS NULL THEN 1 ELSE 0 END AS standalone
      FROM domains d
      LEFT JOIN funnels f
        ON f.id = d.funnel_id AND f.status = 'published'
      LEFT JOIN pages p
-       ON p.funnel_id = f.id
+       ON (p.funnel_id = f.id OR p.id = json_extract(d.provider_config_json, '$.pageId'))
       AND p.status = 'published'
       AND p.published_version_id IS NOT NULL
       AND (? IS NULL OR p.slug = ?)
@@ -420,11 +422,13 @@ export async function resolveCustomDomainUrl(
     .bind(pageSlug, pageSlug, url.hostname.toLowerCase())
     .first<DomainRouteRow>();
   if (!row) return { matched: false, publicUrl: null };
-  if (!row.offer_slug || !row.page_slug || pageSlug === "__unmatched__") {
+  if (!row.page_slug || pageSlug === "__unmatched__") {
     return { matched: true, publicUrl: null };
   }
   const publicUrl = new URL(url);
-  publicUrl.pathname = `/o/${encodeURIComponent(row.offer_slug)}/${encodeURIComponent(row.page_slug)}`;
+  publicUrl.pathname = row.standalone
+    ? `/s/${encodeURIComponent(row.page_slug)}`
+    : `/o/${encodeURIComponent(row.offer_slug ?? "")}/${encodeURIComponent(row.page_slug)}`;
   return { matched: true, publicUrl };
 }
 

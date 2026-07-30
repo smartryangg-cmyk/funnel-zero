@@ -9,25 +9,18 @@ import {
 } from "react";
 import type { BootstrapResponse } from "../../../packages/shared/src/schemas";
 import { api, ApiError } from "./api";
-import { Dashboard } from "./Dashboard";
+import { Assistant } from "./Assistant";
 import { Home } from "./Home";
+import { SettingsSimple } from "./SettingsSimple";
+import { Sites } from "./Sites";
 import { AppShell, Brand, navigate } from "./ui";
 
 const Account = lazy(() => import("./Account").then((module) => ({ default: module.Account })));
-const CloudflareCenter = lazy(() => import("./Integrations").then((module) => ({ default: module.CloudflareCenter })));
 const Domains = lazy(() => import("./CloudflareDomains").then((module) => ({ default: module.Domains })));
 const Subdomains = lazy(() => import("./CloudflareDomains").then((module) => ({ default: module.Subdomains })));
-const Settings = lazy(() => import("./AdminSettings").then((module) => ({ default: module.Settings })));
-const Funnels = lazy(() => import("./Funnels").then((module) => ({ default: module.Funnels })));
-const Hosting = lazy(() => import("./Hosting").then((module) => ({ default: module.Hosting })));
 const MediaLibrary = lazy(() => import("./Media").then((module) => ({ default: module.MediaLibrary })));
-const OfferStudio = lazy(() => import("./OfferStudio").then((module) => ({ default: module.OfferStudio })));
-const Offers = lazy(() => import("./Offers").then((module) => ({ default: module.Offers })));
 const Pages = lazy(() => import("./Pages").then((module) => ({ default: module.Pages })));
-const PixelCenter = lazy(() => import("./PixelCenter").then((module) => ({ default: module.PixelCenter })));
 const PlayerStudio = lazy(() => import("./PlayerStudio").then((module) => ({ default: module.PlayerStudio })));
-const Studies = lazy(() => import("./Studies").then((module) => ({ default: module.Studies })));
-const MetaAds = lazy(() => import("./MetaAds").then((module) => ({ default: module.MetaAds })));
 
 type BootstrapState =
   | { status: "loading" }
@@ -95,29 +88,21 @@ export default function App() {
   }
   if (!bootstrap.data.user) return <Redirect to="/login" />;
 
-  const funnelMatch = path.match(/^\/funnels\/([^/]+)$/);
-  const editorMatch = path.match(/^\/pages\/([^/]+)\/edit$/);
+  const editorMatch = path.match(/^\/sites\/([^/]+)\/edit$/);
   let content: ReactNode;
   if (path === "/home") content = <Home user={bootstrap.data.user} />;
-  else if (path === "/integrations" || path === "/integrations/cloudflare") content = <CloudflareCenter />;
   else if (path === "/account") content = <Account user={bootstrap.data.user} onPasswordChanged={refresh} />;
-  else if (path === "/dashboard") content = <Dashboard user={bootstrap.data.user} />;
-  else if (path === "/hosting") content = <Hosting />;
-  else if (path === "/kratube") content = <PlayerStudio />;
-  else if (path === "/player") content = <Redirect to="/kratube" />;
-  else if (path === "/studio") content = <OfferStudio />;
-  else if (path === "/offers") content = <Offers />;
-  else if (path === "/funnels") content = <Funnels />;
-  else if (funnelMatch) content = <Funnels selectedId={funnelMatch[1]} />;
-  else if (path === "/pages") content = <Pages />;
+  else if (path === "/sites") content = <Sites />;
   else if (editorMatch) content = <Pages editorId={editorMatch[1]} />;
-  else if (path === "/media-library") content = <MediaLibrary mediaEnabled={bootstrap.data.mediaEnabled} />;
-  else if (path === "/tracking") content = <PixelCenter />;
-  else if (path === "/meta-ads") content = <MetaAds />;
+  else if (path === "/videos") content = <PlayerStudio />;
+  else if (path === "/videos/upload") content = <MediaLibrary mediaEnabled={bootstrap.data.mediaEnabled} />;
   else if (path === "/domains") content = <Domains />;
-  else if (path === "/subdomains") content = <Subdomains />;
-  else if (path === "/studies") content = <Studies />;
-  else if (path === "/settings") content = <Settings />;
+  else if (path === "/domains/subdomains") content = <Subdomains />;
+  else if (path === "/assistant") content = <Assistant />;
+  else if (path === "/settings") content = <SettingsSimple user={bootstrap.data.user} />;
+  else if (["/pages", "/hosting", "/dashboard", "/studio", "/offers", "/funnels"].includes(path)) content = <Redirect to="/sites" />;
+  else if (["/kratube", "/player", "/media-library"].includes(path)) content = <Redirect to="/videos" />;
+  else if (path === "/integrations" || path.startsWith("/integrations/") || path === "/subdomains") content = <Redirect to="/domains" />;
   else return <Redirect to="/home" />;
 
   async function logout() {
@@ -516,17 +501,14 @@ function routeTitle(path: string) {
   if (path === "/setup") return "Configuração";
   if (path === "/login") return "Entrar";
   if (path === "/recover" || path === "/reset-password") return "Recuperar acesso";
-  if (path === "/home") return "Central de comando";
-  if (path.startsWith("/funnels")) return "Funis";
-  if (path.startsWith("/pages")) return "Construtor de páginas";
-  if (path === "/kratube") return "KRATUBE";
-  if (path === "/dashboard") return "Dashboards";
-  if (path === "/account") return "Conta";
-  if (path === "/tracking") return "Rastreamento";
-  if (path === "/meta-ads") return "Meta Ads";
+  if (path === "/home") return "Visão geral";
+  if (path.startsWith("/sites")) return "Sites";
+  if (path.startsWith("/videos")) return "Hospedagem de vídeo";
   if (path === "/domains") return "Domínios";
-  if (path === "/subdomains") return "Subdomínios";
-  return "Central de comando";
+  if (path === "/assistant") return "Assistente";
+  if (path === "/settings") return "Configurações";
+  if (path === "/account") return "Conta";
+  return "KRANO";
 }
 
 function passwordStrength(password: string) {

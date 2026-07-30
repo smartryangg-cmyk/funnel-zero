@@ -330,8 +330,7 @@ export function isPublicRouteReady(input: {
 }): boolean {
   return input.pageStatus === "published"
     && Boolean(input.publishedVersionId)
-    && Boolean(input.offerId)
-    && input.offerStatus === "active"
+    && (!input.offerId || input.offerStatus === "active")
     && (!input.funnelId || input.funnelStatus === "published");
 }
 
@@ -474,6 +473,8 @@ export interface DomainSummary {
   id: string;
   funnelId: string | null;
   funnelName: string | null;
+  siteId?: string | null;
+  siteName?: string | null;
   hostname: string;
   zoneName?: string;
   certIssued?: boolean;

@@ -7,7 +7,7 @@ import type {
 import { api } from "./api";
 import { Empty, Notice, PageHeader, format, formatBytes, navigate } from "./ui";
 
-type KratubeView = "library" | "editor" | "analytics" | "experiments" | "security";
+type KratubeView = "library" | "editor" | "analytics" | "security";
 type EditorModule =
   | "style"
   | "progress"
@@ -59,7 +59,7 @@ export function PlayerStudio() {
       .catch((caught: unknown) => setMessage(caught instanceof Error ? caught.message : "Falha nas métricas do vídeo."));
   }, [selected, days]);
 
-  async function save(success = "Configurações do KRATUBE salvas.") {
+  async function save(success = "Configurações do player salvas.") {
     if (!selected || !config) return;
     setSaving(true);
     setMessage("");
@@ -82,19 +82,18 @@ export function PlayerStudio() {
   return (
     <>
       <PageHeader
-        eyebrow="KRATUBE"
-        title="Hospedagem, player e conversão em uma estrutura única."
-        subtitle="Biblioteca, editor modular, testes, segurança e analytics sem sair da KRANO."
-        actions={<button className="button primary" onClick={() => navigate("/media-library")}>+ Enviar vídeo</button>}
+        eyebrow="Vídeos"
+        title="Hospedagem de vídeo"
+        subtitle="Envie, personalize e acompanhe."
+        actions={<button className="button primary" onClick={() => navigate("/videos/upload")}>+ Enviar vídeo</button>}
       />
       {message && <Notice tone={message.includes("salv") || message.includes("configurad") ? "success" : "warning"}>{message}</Notice>}
 
-      <nav className="kratube-nav" aria-label="Áreas do KRATUBE">
+      <nav className="kratube-nav" aria-label="Áreas da hospedagem de vídeo">
         {([
           ["library", "Meus vídeos"],
           ["editor", "Editar player"],
           ["analytics", "Analytics"],
-          ["experiments", "Testes A/B"],
           ["security", "Segurança"]
         ] as const).map(([key, label]) => <button key={key} className={view === key ? "active" : ""} disabled={key !== "library" && !selected} onClick={() => setView(key)}>{label}</button>)}
       </nav>
@@ -166,26 +165,6 @@ export function PlayerStudio() {
 
           {view === "analytics" && <VideoAnalytics metrics={metrics} />}
 
-          {view === "experiments" && (
-            <section className="kratube-workspace">
-              <article className="panel">
-                <span className="eyebrow">THUMBNAILS A/B</span>
-                <h2>Teste duas capas com divisão 50/50.</h2>
-                <p className="muted">Cada visitante permanece na mesma variante. Os eventos registram a variante para comparação sem declarar vencedor com amostra pequena.</p>
-                <label className="field"><span>Thumbnail A</span><select value={config.posterAssetId} onChange={(event) => setConfig({ ...config, posterAssetId: event.target.value })}><option value="">Poster definido na página</option>{images.map((asset) => <option key={asset.id} value={asset.id}>{asset.originalName}</option>)}</select></label>
-                <label className="field"><span>Thumbnail B</span><select value={config.posterTestAssetId} onChange={(event) => setConfig({ ...config, posterTestAssetId: event.target.value })}><option value="">Sem teste B</option>{images.filter((asset) => asset.id !== config.posterAssetId).map((asset) => <option key={asset.id} value={asset.id}>{asset.originalName}</option>)}</select></label>
-                <button className="button primary" disabled={saving} onClick={() => void save("Teste de thumbnail configurado.")}>{saving ? "Salvando…" : "Salvar teste"}</button>
-              </article>
-              <article className="panel experiment-principles">
-                <span className="eyebrow">LEITURA PROFISSIONAL</span>
-                <h2>O que comparar</h2>
-                <div><strong>Play rate</strong><small>Qual capa gera mais início de vídeo.</small></div>
-                <div><strong>Retenção</strong><small>Qual variante mantém audiência até o pitch.</small></div>
-                <div><strong>Conversão</strong><small>Qual grupo chega ao checkout e à compra.</small></div>
-              </article>
-            </section>
-          )}
-
           {view === "security" && (
             <section className="kratube-workspace">
               <article className="panel">
@@ -220,7 +199,7 @@ function VideoLibrary({
   metrics: VideoMetrics | null;
   onOpen: (id: string, target: KratubeView) => void;
 }) {
-  if (!videos.length) return <section className="panel"><Empty icon="▶" title="Envie o primeiro vídeo" text="O upload fica no R2 da sua conta e o player pode ser usado em qualquer página publicada." action={<button className="button primary" onClick={() => navigate("/media-library")}>Enviar vídeo</button>} /></section>;
+  if (!videos.length) return <section className="panel"><Empty icon="▶" title="Envie o primeiro vídeo" text="O arquivo fica no R2 da sua conta." action={<button className="button primary" onClick={() => navigate("/videos/upload")}>Enviar vídeo</button>} /></section>;
   return (
     <section className="panel kratube-library">
       <div className="panel-header"><div><span className="eyebrow">BIBLIOTECA</span><h2>Meus vídeos</h2></div><span className="muted">{videos.length} arquivo(s)</span></div>
@@ -267,7 +246,7 @@ function EditorMenu({ config, onSelect }: { config: PlayerConfig; onSelect: (mod
   return (
     <div className="vturb-menu">
       <header>
-        <span className="eyebrow">KRATUBE PLAYER</span>
+        <span className="eyebrow">PLAYER</span>
         <h2>Configurações do vídeo</h2>
         <p>Escolha um módulo para personalizar.</p>
       </header>

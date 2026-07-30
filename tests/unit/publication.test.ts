@@ -11,7 +11,7 @@ const ready = {
 };
 
 describe("publicação real", () => {
-  it("só confirma uma rota com página, versão, oferta e funil publicados", () => {
+  it("confirma uma rota legada com página, versão, oferta e funil publicados", () => {
     expect(isPublicRouteReady(ready)).toBe(true);
   });
 
@@ -21,5 +21,15 @@ describe("publicação real", () => {
 
   it("permite páginas independentes de um funil", () => {
     expect(isPublicRouteReady({ ...ready, funnelId: null, funnelStatus: null })).toBe(true);
+  });
+
+  it("permite um site independente sem oferta e sem funil", () => {
+    expect(isPublicRouteReady({
+      ...ready,
+      offerId: null,
+      offerStatus: null,
+      funnelId: null,
+      funnelStatus: null
+    })).toBe(true);
   });
 });

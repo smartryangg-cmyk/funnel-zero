@@ -333,7 +333,8 @@ export const api = {
     }),
   attachDomain: (input: {
     hostname: string;
-    funnelId: string;
+    siteId?: string;
+    funnelId?: string;
     isPrimary?: boolean;
   }) =>
     request<{ id: string; hostname: string; status: string }>("/api/domains", {

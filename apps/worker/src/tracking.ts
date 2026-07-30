@@ -32,7 +32,7 @@ export interface PublicTrackingContext {
   host: string;
   path: string;
   anonymousId: string;
-  offerId: string;
+  offerId: string | null;
   funnelId: string | null;
   pageId: string;
   variantId: string | null;
@@ -49,7 +49,7 @@ interface PublicEvent {
   type: string;
   anonymousId: string;
   sessionKey: string | null;
-  offerId: string;
+  offerId: string | null;
   funnelId: string | null;
   pageId: string;
   variantId: string | null;

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { AssetSummary, OfferSummary } from "../../../packages/shared/src/schemas";
+import type { AssetSummary } from "../../../packages/shared/src/schemas";
 import { api } from "./api";
 import { Empty, Notice, PageHeader, StatusPill, formatBytes } from "./ui";
 
@@ -12,17 +12,14 @@ interface UploadState {
 
 export function MediaLibrary({ mediaEnabled }: { mediaEnabled: boolean }) {
   const [assets, setAssets] = useState<AssetSummary[]>([]);
-  const [offers, setOffers] = useState<OfferSummary[]>([]);
-  const [offerId, setOfferId] = useState("");
   const [upload, setUpload] = useState<UploadState | null>(null);
   const [error, setError] = useState("");
   const input = useRef<HTMLInputElement>(null);
 
   async function load() {
     try {
-      const [assetsResult, offersResult] = await Promise.all([api.assets(), api.offers()]);
+      const assetsResult = await api.assets();
       setAssets(assetsResult.assets);
-      setOffers(offersResult.offers);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Falha ao carregar biblioteca.");
     }
@@ -45,7 +42,7 @@ export function MediaLibrary({ mediaEnabled }: { mediaEnabled: boolean }) {
         fileName: file.name,
         mimeType: file.type || "application/octet-stream",
         byteSize: file.size,
-        offerId: offerId || null,
+        offerId: null,
         sha256
       });
       assetId = init.assetId;
@@ -95,9 +92,9 @@ export function MediaLibrary({ mediaEnabled }: { mediaEnabled: boolean }) {
     return (
       <>
         <PageHeader
-          eyebrow="Mídia e VSL"
-          title="Hospedagem de vídeo é opcional."
-          subtitle="Sua estrutura principal já funciona com sites, funis, tracking e dashboard sem ativar o R2."
+          eyebrow="Vídeos"
+          title="Ative a hospedagem de vídeo"
+          subtitle="Sites funcionam sem o R2. Ative somente se quiser enviar vídeos."
         />
         <section className="panel">
           <Empty
@@ -112,10 +109,10 @@ export function MediaLibrary({ mediaEnabled }: { mediaEnabled: boolean }) {
   return (
     <>
       <PageHeader
-        eyebrow="Mídia e VSL"
-        title="Sua biblioteca no R2."
-        subtitle="Upload multipart com retomada por parte, proteção FREE_ONLY e entrega com Range."
-        actions={<><select className="compact-select" value={offerId} onChange={(event) => setOfferId(event.target.value)}><option value="">Sem oferta</option>{offers.map((offer) => <option key={offer.id} value={offer.id}>{offer.name}</option>)}</select><button className="button primary" onClick={() => input.current?.click()}>+ Enviar mídia</button><input ref={input} hidden type="file" accept="video/mp4,video/webm,image/jpeg,image/png,image/webp,image/gif,application/pdf" onChange={(event) => { const file = event.target.files?.[0]; if (file) void uploadFile(file); event.currentTarget.value = ""; }} /></>}
+        eyebrow="Vídeos"
+        title="Enviar vídeo"
+        subtitle="MP4 ou WebM, direto para sua conta Cloudflare."
+        actions={<><button className="button primary" onClick={() => input.current?.click()}>+ Escolher arquivo</button><input ref={input} hidden type="file" accept="video/mp4,video/webm" onChange={(event) => { const file = event.target.files?.[0]; if (file) void uploadFile(file); event.currentTarget.value = ""; }} /></>}
       />
       {error && <Notice tone="error">{error}</Notice>}
       <section className="panel storage-strip">

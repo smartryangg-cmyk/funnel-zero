@@ -141,9 +141,7 @@ function mapPage(row: PageRow, origin: string) {
     ? null
     : row.status !== "published"
       ? "Publique uma versão para gerar a URL."
-      : !row.offer_id
-        ? "Vincule esta página a uma oferta antes de publicar."
-        : row.offer_status !== "active"
+      : row.offer_id && row.offer_status !== "active"
           ? "A oferta precisa estar ativa."
           : row.funnel_id && row.funnel_status !== "published"
             ? "O funil vinculado precisa estar publicado."
@@ -162,7 +160,9 @@ function mapPage(row: PageRow, origin: string) {
     publishedAt: row.published_at,
     updatedAt: row.updated_at,
     publicUrl: isLive
-      ? `${origin}/o/${row.offer_slug ?? slugify(row.offer_name ?? "oferta")}/${row.slug}`
+      ? row.offer_id
+        ? `${origin}/o/${row.offer_slug ?? slugify(row.offer_name ?? "oferta")}/${row.slug}`
+        : `${origin}/s/${row.slug}`
       : null,
     isLive,
     publicationIssue
@@ -1023,7 +1023,7 @@ async function createPage(
   const body = parseBodyRecord(await readJson(request, 640_000));
   const id = randomId();
   const name = requiredString(body.name, "Nome");
-  const slug = slugify(optionalString(body.slug, 80) ?? name) || `pagina-${id.slice(0, 6)}`;
+  const slug = makeUniqueSlug(name, body.slug);
   const relationship = await resolvePageRelationship(
     env,
     optionalString(body.offerId, 100),
@@ -1160,13 +1160,6 @@ async function publishPage(
      WHERE p.id = ?`
   ).bind(id).first<PageRow>();
   if (!current?.content_json) return errorResponse(404, "NOT_FOUND", "Página não encontrada.");
-  if (!current.offer_id || !current.offer_slug) {
-    return errorResponse(
-      409,
-      "PAGE_WITHOUT_OFFER",
-      "Vincule a página a uma oferta antes de publicar."
-    );
-  }
   const publishedFunnel = Boolean(
     current.funnel_id && current.funnel_status !== "published"
   );
@@ -1205,14 +1198,16 @@ async function publishPage(
         `UPDATE pages SET status = 'published', published_version_id = ?,
          published_at = datetime('now'), updated_at = datetime('now') WHERE id = ?`
       ).bind(versionId, id),
-      env.DB.prepare(
-        "UPDATE offers SET status = 'active', updated_at = datetime('now') WHERE id = ?"
-      ).bind(current.offer_id)
+      ...(current.offer_id ? [
+        env.DB.prepare(
+          "UPDATE offers SET status = 'active', updated_at = datetime('now') WHERE id = ?"
+        ).bind(current.offer_id)
+      ] : [])
     ];
   }
   statements.push(audit(env, user.id, "page.published", "page", id, {
     version: nextVersion,
-    activatedOffer: current.offer_status !== "active",
+    activatedOffer: Boolean(current.offer_id && current.offer_status !== "active"),
     publishedFunnel,
     linkedPagesPublished
   }));
@@ -1231,7 +1226,7 @@ async function publishPage(
     versionNumber: nextVersion,
     live: true,
     publicUrl: page.publicUrl,
-    activatedOffer: current.offer_status !== "active",
+    activatedOffer: Boolean(current.offer_id && current.offer_status !== "active"),
     publishedFunnel
   });
 }

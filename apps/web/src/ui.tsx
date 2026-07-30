@@ -12,7 +12,7 @@ export function Brand() {
     <div className="brand" aria-label="KRANO">
       <span className="brand-mark" aria-hidden="true"><i /><i /></span>
       <span className="brand-word">KRANO</span>
-      <small className="brand-version">v0.4</small>
+      <small className="brand-version">v0.5</small>
     </div>
   );
 }
@@ -33,54 +33,18 @@ interface NavigationGroup {
 
 const navigation: NavigationGroup[] = [
   {
-    label: "Central",
-    items: [{ href: "/home", icon: "home", label: "Visão geral", mobile: true }]
-  },
-  {
-    label: "Criar",
+    label: "Hospedagem",
     items: [
-      {
-        href: "/studio",
-        icon: "funnel",
-        label: "Funis e ofertas",
-        match: ["/studio", "/offers", "/funnels"],
-        mobile: true
-      },
-      { href: "/pages", icon: "layout", label: "Páginas e sites" }
+      { href: "/home", icon: "home", label: "Visão geral", mobile: true },
+      { href: "/sites", icon: "layout", label: "Sites", mobile: true },
+      { href: "/videos", icon: "play", label: "Hospedagem de vídeo", match: ["/videos"], mobile: true },
+      { href: "/domains", icon: "globe", label: "Domínios" }
     ]
   },
   {
-    label: "Publicar",
+    label: "Ajuda",
     items: [
-      {
-        href: "/kratube",
-        icon: "play",
-        label: "Vídeos e player",
-        match: ["/kratube", "/player"],
-        mobile: true
-      },
-      { href: "/hosting", icon: "server", label: "Hospedagem" },
-      { href: "/media-library", icon: "folder", label: "Arquivos" }
-    ]
-  },
-  {
-    label: "Medir",
-    items: [
-      { href: "/dashboard", icon: "chart", label: "Analytics", mobile: true },
-      { href: "/tracking", icon: "target", label: "Pixels e eventos" },
-      { href: "/meta-ads", icon: "ads", label: "Meta Ads" }
-    ]
-  },
-  {
-    label: "Configurar",
-    items: [
-      {
-        href: "/integrations/cloudflare",
-        icon: "cloud",
-        label: "Conexões",
-        match: ["/integrations", "/integrations/cloudflare"]
-      },
-      { href: "/domains", icon: "globe", label: "Domínios", match: ["/domains", "/subdomains"] },
+      { href: "/assistant", icon: "spark", label: "Assistente", mobile: true },
       { href: "/settings", icon: "book", label: "Configurações" }
     ]
   }
@@ -195,7 +159,7 @@ export function AppShell({
         <Brand />
         <div className="sidebar-context">
           <span className="sidebar-context-orb" aria-hidden="true"><i /></span>
-          <span><small>Workspace</small><strong>Operação principal</strong></span>
+          <span><small>Workspace</small><strong>Minha hospedagem</strong></span>
         </div>
         <button
           type="button"
@@ -230,7 +194,7 @@ export function AppShell({
         <div className="sidebar-bottom">
           <div className="free-badge">
             <span className="status-dot" />
-            <div><strong>Plano gratuito protegido</strong><small>Limites monitorados pela KRANO</small></div>
+            <div><strong>Cloudflare</strong><small>Uso gratuito monitorado</small></div>
           </div>
           <button className={`user-card ${path === "/account" ? "active" : ""}`} onClick={() => navigate("/account")}>
             <span className="avatar">{initials(user.name)}</span>
@@ -387,7 +351,8 @@ type IconName =
   | "book"
   | "chart"
   | "target"
-  | "ads";
+  | "ads"
+  | "spark";
 
 function Icon({ name }: { name: IconName }) {
   const common = {
@@ -437,6 +402,9 @@ function Icon({ name }: { name: IconName }) {
       break;
     case "ads":
       drawing = <><path d="M4 13V8l12-4v13L4 13Z" /><path d="M7 14v5a2 2 0 0 0 2 2h2v-6M16 9h3a2 2 0 0 1 0 4h-3" /></>;
+      break;
+    case "spark":
+      drawing = <><path d="m12 3 1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8Z" /><path d="m19 16 .8 2.2L22 19l-2.2.8L19 22l-.8-2.2L16 19l2.2-.8Z" /></>;
       break;
   }
   return <svg viewBox="0 0 24 24" aria-hidden="true" {...common}>{drawing}</svg>;

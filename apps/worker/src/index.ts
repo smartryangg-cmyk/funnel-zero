@@ -578,7 +578,8 @@ export default {
     try {
       if (url.pathname.startsWith("/api/")) return await handleApi(request, env, ctx, url);
       if (url.pathname.startsWith("/media/")) return await serveMedia(request, env, url);
-      if (url.pathname === "/o" || url.pathname.startsWith("/o/")) {
+      if (url.pathname === "/o" || url.pathname.startsWith("/o/")
+        || url.pathname === "/s" || url.pathname.startsWith("/s/")) {
         return await servePublicPage(request, env, url);
       }
       const customDomain = await resolveCustomDomainUrl(env, url);

@@ -2,7 +2,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import type {
   DomainProviderStatus,
   DomainSummary,
-  FunnelSummary
+  PageSummary
 } from "../../../packages/shared/src/schemas";
 import { api } from "./api";
 import { Empty, Notice, PageHeader, StatusPill, navigate } from "./ui";
@@ -113,7 +113,7 @@ export function Domains() {
             <div><dt>Subdomínio</dt><dd>oferta.seudominio.com</dd></div>
           </dl>
           <p>Primeiro o domínio entra nesta tela. Depois você cria quantos subdomínios precisar e aponta cada um para um funil.</p>
-          <button className="button secondary" onClick={() => navigate("/subdomains")}>Gerenciar subdomínios</button>
+          <button className="button secondary" onClick={() => navigate("/domains/subdomains")}>Gerenciar subdomínios</button>
         </article>
       </section>
 
@@ -128,7 +128,7 @@ export function Domains() {
                 <span className={`domain-health ${zone.status === "active" ? "online" : ""}`} />
                 <div><strong>{zone.name}</strong><small>{zone.status === "active" ? "DNS ativo" : "Aguardando ativação"}</small></div>
                 <StatusPill status={zone.status === "active" ? "active" : "pending"} />
-                <button className="button ghost" disabled={zone.status !== "active"} onClick={() => navigate(`/subdomains?zone=${encodeURIComponent(zone.id)}`)}>Criar subdomínio →</button>
+                <button className="button ghost" disabled={zone.status !== "active"} onClick={() => navigate(`/domains/subdomains?zone=${encodeURIComponent(zone.id)}`)}>Criar subdomínio →</button>
               </article>
             ))}
           </div>
@@ -165,21 +165,21 @@ export function Domains() {
 export function Subdomains() {
   const [provider, setProvider] = useState<DomainProviderStatus | null>(null);
   const [domains, setDomains] = useState<DomainSummary[]>([]);
-  const [funnels, setFunnels] = useState<FunnelSummary[]>([]);
+  const [sites, setSites] = useState<PageSummary[]>([]);
   const [zones, setZones] = useState<CloudflareZone[]>([]);
   const [message, setMessage] = useState("");
   const [showAttach, setShowAttach] = useState(false);
 
   async function load() {
     try {
-      const [domainResult, funnelResult, zoneResult] = await Promise.all([
+      const [domainResult, siteResult, zoneResult] = await Promise.all([
         api.domains(),
-        api.funnels(),
+        api.pages(),
         api.domainZones()
       ]);
       setProvider(domainResult.provider);
       setDomains(domainResult.domains);
-      setFunnels(funnelResult.funnels);
+      setSites(siteResult.pages);
       setZones(zoneResult.zones);
     } catch (caught) {
       setMessage(caught instanceof Error ? caught.message : "Falha ao carregar os subdomínios.");
@@ -215,7 +215,7 @@ export function Subdomains() {
       <PageHeader
         eyebrow="Integrações / Cloudflare / Subdomínios"
         title="Um endereço para cada funil."
-        subtitle="Crie oferta.seudominio.com, quiz.seudominio.com ou qualquer outro endereço sem abrir o painel Cloudflare."
+        subtitle="Escolha um endereço e o site que deve abrir."
         actions={<><button className="button secondary" onClick={() => void sync()} disabled={!provider?.ready}>Verificar SSL</button><button className="button primary" onClick={() => setShowAttach(true)} disabled={!provider?.ready || !activeZones.length}>+ Criar subdomínio</button></>}
       />
       {message && <Notice tone={message.includes("Falha") || message.includes("não") ? "warning" : "success"}>{message}</Notice>}
@@ -236,7 +236,7 @@ export function Subdomains() {
           <div className="table-list">
             {domains.map((domain) => (
               <div key={domain.id}>
-                <div><a className="domain-link" href={`https://${domain.hostname}`} target="_blank" rel="noreferrer">{domain.hostname} ↗</a><small>{domain.funnelName ?? "Sem funil associado"} · {domain.certIssued === false ? "SSL preparando" : "SSL ativo"}</small></div>
+                <div><a className="domain-link" href={`https://${domain.hostname}`} target="_blank" rel="noreferrer">{domain.hostname} ↗</a><small>{domain.siteName ?? "Sem site associado"} · {domain.certIssued === false ? "SSL preparando" : "SSL ativo"}</small></div>
                 <StatusPill status={domain.status} />
                 <button className="danger-text" onClick={() => void remove(domain)}>Remover</button>
               </div>
@@ -244,7 +244,7 @@ export function Subdomains() {
           </div>
         )}
       </section>
-      {showAttach && <AttachSubdomain zones={activeZones} funnels={funnels} onClose={() => setShowAttach(false)} onSaved={async () => { setShowAttach(false); setMessage("Subdomínio enviado para publicação e SSL."); await load(); }} />}
+      {showAttach && <AttachSubdomain zones={activeZones} sites={sites} onClose={() => setShowAttach(false)} onSaved={async () => { setShowAttach(false); setMessage("Subdomínio enviado para publicação e SSL."); await load(); }} />}
     </>
   );
 }
@@ -308,32 +308,32 @@ function ImportDomain({
 
 function AttachSubdomain({
   zones,
-  funnels,
+  sites,
   onClose,
   onSaved
 }: {
   zones: CloudflareZone[];
-  funnels: FunnelSummary[];
+  sites: PageSummary[];
   onClose: () => void;
   onSaved: () => Promise<void>;
 }) {
   const requestedZone = new URLSearchParams(location.search).get("zone") ?? "";
   const [zoneId, setZoneId] = useState(zones.some((zone) => zone.id === requestedZone) ? requestedZone : zones[0]?.id ?? "");
   const [subdomain, setSubdomain] = useState("oferta");
-  const [funnelId, setFunnelId] = useState("");
+  const [siteId, setSiteId] = useState("");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const zone = zones.find((item) => item.id === zoneId);
   const hostname = zone && subdomain ? `${subdomain}.${zone.name}` : "";
-  const publishedFunnels = funnels.filter((funnel) => funnel.status === "published");
+  const publishedSites = sites.filter((site) => site.isLive);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
-    if (!hostname || !funnelId) return;
+    if (!hostname || !siteId) return;
     setSaving(true);
     setError("");
     try {
-      await api.attachDomain({ hostname, funnelId, isPrimary: true });
+      await api.attachDomain({ hostname, siteId, isPrimary: true });
       await onSaved();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Falha ao publicar o subdomínio.");
@@ -352,11 +352,11 @@ function AttachSubdomain({
             <label className="field"><span>Domínio-base</span><select required value={zoneId} onChange={(event) => setZoneId(event.target.value)}>{zones.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
           </div>
           <div className="domain-preview"><small>O endereço ficará assim</small><strong>https://{hostname || "nome.seudominio.com"}</strong></div>
-          <label className="field"><span>Qual funil deve abrir?</span><select required value={funnelId} onChange={(event) => setFunnelId(event.target.value)}><option value="">Escolha um funil publicado</option>{publishedFunnels.map((funnel) => <option key={funnel.id} value={funnel.id}>{funnel.name}</option>)}</select></label>
+          <label className="field"><span>Qual site deve abrir?</span><select required value={siteId} onChange={(event) => setSiteId(event.target.value)}><option value="">Escolha um site publicado</option>{publishedSites.map((site) => <option key={site.id} value={site.id}>{site.name}</option>)}</select></label>
           <div className="automatic-steps"><span>✓ DNS automático</span><span>✓ SSL automático</span><span>✓ Sem novo deploy</span></div>
-          {!publishedFunnels.length && <Notice><strong>Publique o funil primeiro</strong><p>O subdomínio só pode apontar para um funil realmente publicado.</p></Notice>}
+          {!publishedSites.length && <Notice><strong>Publique um site primeiro</strong><p>O subdomínio precisa apontar para um site no ar.</p></Notice>}
           {error && <p className="form-error">{error}</p>}
-          <div className="form-actions"><button type="button" className="button ghost" onClick={onClose}>Cancelar</button><button className="button primary" disabled={!hostname || !funnelId || saving}>{saving ? "Publicando…" : "Publicar subdomínio"}</button></div>
+          <div className="form-actions"><button type="button" className="button ghost" onClick={onClose}>Cancelar</button><button className="button primary" disabled={!hostname || !siteId || saving}>{saving ? "Publicando…" : "Publicar subdomínio"}</button></div>
         </form>
       </section>
     </div>
